@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn, einsum
 from einops import rearrange, repeat
+from .prompt import SoftPrompt3D
 
 from models.networks.diffusion_networks.ldm_diffusion_util import checkpoint
 
@@ -164,6 +165,8 @@ class CrossAttention(nn.Module):
         self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
         self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
 
+        self.soft_prompt = SoftPrompt3D(m_tokens=8, d_model=query_dim)
+
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, query_dim),
             nn.Dropout(dropout)
@@ -185,6 +188,8 @@ class CrossAttention(nn.Module):
 
         k = self.to_k(context)
         v = self.to_v(context)
+
+        k, v = self.soft_prompt(k, v, B=x.shape[0])
 
         # if torch.isnan(q).any():
         #     import pdb; pdb.set_trace()
