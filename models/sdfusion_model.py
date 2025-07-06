@@ -88,7 +88,6 @@ class SDFusionModel(BaseModel):
         # freeze VQVAE & modality encoders completely
         for p in self.vqvae.parameters():
             p.requires_grad_(False)
-        # (do the same if you have clip_enc, bert_enc, etc.)
 
         self.df.to(self.device)
         self.init_diffusion_params(scale=1, opt=opt)
