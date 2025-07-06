@@ -120,6 +120,8 @@ if __name__ == "__main__":
     # this will parse args, setup log_dirs, multi-gpus
     seed = 2023
     opt = SDFusionOpt(seed=seed)
+    ckpt_path = 'saved_ckpt/sdfusion-snet-all.pth'
+    opt.init_model_args(ckpt_path=ckpt_path)
     device = opt.device
     opt.init_dset_args(dataset_mode="snet")
 
