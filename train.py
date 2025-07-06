@@ -47,14 +47,18 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
         if get_rank() == 0:
             visualizer.reset()
         
-        data = next(train_dg)
-        model.set_input(data)
-        model.optimize_parameters(iter_i)
+        if opt.online_sofa:
+            # ignore the dataset, run SOFA-based optimize_parameters()
+            model.optimize_parameters(iter_i)
+        else:
+            data = next(train_dg)
+            model.set_input(data)
+            model.optimize_parameters(iter_i)
 
         # nBatches_has_trained += opt.batch_size
 
         if get_rank() == 0:
-            if iter_i % opt.print_freq == 0:
+            if not opt.online_sofa and iter_i % opt.print_freq == 0:
                 errors = model.get_current_errors()
 
                 t = (time.time() - iter_start_time) / opt.batch_size
@@ -65,20 +69,16 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
             # if (nBatches_has_trained % opt.display_freq == 0):
 
             # display every n batches
-            if iter_i % opt.display_freq == 0:
-                if iter_i == 0 and opt.debug == "1":
-                    pbar.update(1)
-                    continue
-
-                # eval
+            if not opt.online_sofa and iter_i % opt.display_freq == 0:
+                # only display when using real data
                 model.inference(data)
-                visualizer.display_current_results(model.get_current_visuals(), iter_i, phase='train')
+                visualizer.display_current_results(
+                    model.get_current_visuals(), iter_i, phase='train')
 
-                # model.set_input(next(test_dg))
                 test_data = next(test_dg)
                 model.inference(test_data)
-                visualizer.display_current_results(model.get_current_visuals(), iter_i, phase='test')
-                # torch.cuda.empty_cache()
+                visualizer.display_current_results(
+                    model.get_current_visuals(), iter_i, phase='test')
 
             if iter_ip1 % opt.save_latest_freq == 0:
                 cprint('saving the latest model (current_iter %d)' % (iter_i), 'blue')
@@ -86,7 +86,7 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
                 model.save(latest_name, iter_ip1)
 
             # save every 3000 steps (batches)
-            if iter_ip1 % opt.save_steps_freq == 0:
+            if iter_ip1 % opt.save_latest_freq == 0:
                 cprint('saving the model at iters %d' % iter_ip1, 'blue')
                 latest_name = f'steps-latest'
                 model.save(latest_name, iter_ip1)

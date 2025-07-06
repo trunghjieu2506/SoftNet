@@ -23,6 +23,9 @@ from models.base_model import BaseModel
 from models.networks.vqvae_networks.network import VQVAE
 from models.networks.diffusion_networks.network import DiffusionUNet
 from models.model_utils import load_vqvae
+# add near the other imports
+from models.networks.diffusion_networks.prompt import SoftPrompt3D
+
 
 # ldm util
 from models.networks.diffusion_networks.ldm_diffusion_util import (
@@ -69,17 +72,37 @@ class SDFusionModel(BaseModel):
         # init diffusion networks
         unet_params = df_conf.unet.params
         self.df = DiffusionUNet(unet_params, vq_conf=vq_conf)
-        self.df.to(self.device)
-        self.init_diffusion_params(scale=1, opt=opt)
 
         # init vqvae
         self.vqvae = load_vqvae(vq_conf, vq_ckpt=opt.vq_ckpt, opt=opt)
+
+        self.prompt_modules = []                     # ❶ keep a handle
+
+        for module in self.df.modules():
+            if isinstance(module, SoftPrompt3D):
+                self.prompt_modules.append(module)   # remember it
+                continue                             # let its params keep default requires_grad=True
+            for p in module.parameters():            # freeze everything else in UNet
+                p.requires_grad_(False)
+
+        # freeze VQVAE & modality encoders completely
+        for p in self.vqvae.parameters():
+            p.requires_grad_(False)
+        # (do the same if you have clip_enc, bert_enc, etc.)
+
+        self.df.to(self.device)
+        self.init_diffusion_params(scale=1, opt=opt)
+
         ######## END: Define Networks ########
 
         if self.isTrain:
 
             # initialize optimizers
-            self.optimizer = optim.AdamW([p for p in self.df.parameters() if p.requires_grad == True], lr=opt.lr)
+            prompt_params = []
+            for mod in self.prompt_modules:
+                prompt_params += list(mod.parameters())          # ≈10 k params total
+
+            self.optimizer = optim.AdamW(prompt_params, lr=opt.lr)   # e.g., lr=2e-3
             self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, 1000, 0.9)
 
             self.optimizers = [self.optimizer]
@@ -93,6 +116,12 @@ class SDFusionModel(BaseModel):
                 self.optimizers = [self.optimizer]
             # self.schedulers = [self.scheduler]
 
+        total, trainable = 0, 0
+        for n, p in self.named_parameters():
+            total += p.numel()
+            if p.requires_grad:
+                trainable += p.numel()
+        print(f"[Prompt-tune] trainable {trainable/1e6:.3f} M  /  total {total/1e6:.1f} M")
 
         # setup renderer
         if 'snet' in opt.dataset_mode:
@@ -469,7 +498,7 @@ class SDFusionModel(BaseModel):
 
     def optimize_parameters(self, total_steps):
 
-        self.set_requires_grad([self.df], requires_grad=True)
+        # self.set_requires_grad([self.df], requires_grad=True)
 
         self.forward()
         self.optimizer.zero_grad()
