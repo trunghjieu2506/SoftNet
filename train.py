@@ -11,6 +11,7 @@ import torch.backends.cudnn as cudnn
 from options.train_options import TrainOptions
 from datasets.dataloader import CreateDataLoader, get_data_generator
 from models.base_model import create_model
+from utils.demo_util import SDFusionOpt
 
 from utils.distributed import (
     get_rank,
@@ -117,7 +118,8 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
 
 if __name__ == "__main__":
     # this will parse args, setup log_dirs, multi-gpus
-    opt = TrainOptions().parse_and_setup()
+    seed = 2023
+    opt = SDFusionOpt(gpu_ids=gpu_ids, seed=seed)
     device = opt.device
     rank = opt.rank
 
