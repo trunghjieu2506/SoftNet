@@ -119,9 +119,9 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
 if __name__ == "__main__":
     # this will parse args, setup log_dirs, multi-gpus
     seed = 2023
-    opt = SDFusionOpt(gpu_ids=gpu_ids, seed=seed)
+    opt = SDFusionOpt(seed=seed)
     device = opt.device
-    opt.init_dset_args(dataset_mode=dset)
+    opt.init_dset_args(dataset_mode="snet")
 
     # CUDA_VISIBLE_DEVICES = int(os.environ["LOCAL_RANK"]) 
     # import pdb; pdb.set_trace()
@@ -130,16 +130,19 @@ if __name__ == "__main__":
     from datetime import datetime
     opt.exp_time = datetime.now().strftime('%Y-%m-%dT%H-%M')
 
-    train_dl, test_dl, test_dl_for_eval = CreateDataLoader(opt) 
-    train_ds, test_ds = train_dl.dataset, test_dl.dataset
+    #dummy dataset
+    train_dl = test_dl = test_dl_for_eval = None
 
-    dataset_size = len(train_ds)
-    if opt.dataset_mode == 'shapenet_lang':
-        cprint('[*] # training text snippets = %d' % len(train_ds), 'yellow')
-        cprint('[*] # testing text snippets = %d' % len(test_ds), 'yellow')
-    else:
-        cprint('[*] # training images = %d' % len(train_ds), 'yellow')
-        cprint('[*] # testing images = %d' % len(test_ds), 'yellow')
+    # train_dl, test_dl, test_dl_for_eval = CreateDataLoader(opt) 
+    # train_ds, test_ds = train_dl.dataset, test_dl.dataset
+
+    # dataset_size = len(train_ds)
+    # if opt.dataset_mode == 'shapenet_lang':
+    #     cprint('[*] # training text snippets = %d' % len(train_ds), 'yellow')
+    #     cprint('[*] # testing text snippets = %d' % len(test_ds), 'yellow')
+    # else:
+    #     cprint('[*] # training images = %d' % len(train_ds), 'yellow')
+    #     cprint('[*] # testing images = %d' % len(test_ds), 'yellow')
 
     # main loop
     model = create_model(opt)
