@@ -121,7 +121,7 @@ if __name__ == "__main__":
     seed = 2023
     opt = SDFusionOpt(gpu_ids=gpu_ids, seed=seed)
     device = opt.device
-    rank = opt.rank
+    opt.init_dset_args(dataset_mode=dset)
 
     # CUDA_VISIBLE_DEVICES = int(os.environ["LOCAL_RANK"]) 
     # import pdb; pdb.set_trace()
@@ -130,7 +130,7 @@ if __name__ == "__main__":
     from datetime import datetime
     opt.exp_time = datetime.now().strftime('%Y-%m-%dT%H-%M')
 
-    train_dl, test_dl, test_dl_for_eval = CreateDataLoader(opt)
+    train_dl, test_dl, test_dl_for_eval = CreateDataLoader(opt) 
     train_ds, test_ds = train_dl.dataset, test_dl.dataset
 
     dataset_size = len(train_ds)

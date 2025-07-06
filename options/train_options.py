@@ -24,6 +24,7 @@ class TrainOptions(BaseOptions):
         # weights
         self.parser.add_argument('--lambda_L1', type=float, default=10.0, help='weight for L1 loss')
         self.parser.add_argument('--soft_prompt_tokens', type=int, default=8)
+        self.parser.add_argument('--top-k', type=int, default=50)
         self.parser.add_argument('--online_sofa', action='store_true',
                     help='Ignore dataset and use SOFA-based reward in optimize_parameters()')
 

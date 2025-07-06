@@ -19,6 +19,7 @@ from torch import nn, optim
 import torchvision.utils as vutils
 import torchvision.transforms as transforms
 
+from models.online_loss import OnlineLoss
 from models.base_model import BaseModel
 from models.networks.vqvae_networks.network import VQVAE
 from models.networks.diffusion_networks.network import DiffusionUNet
@@ -26,6 +27,8 @@ from models.model_utils import load_vqvae
 # add near the other imports
 from models.networks.diffusion_networks.prompt import SoftPrompt3D
 
+#util
+from utils.replay_buffer import TopKBuffer
 
 # ldm util
 from models.networks.diffusion_networks.ldm_diffusion_util import (
@@ -75,19 +78,27 @@ class SDFusionModel(BaseModel):
 
         # init vqvae
         self.vqvae = load_vqvae(vq_conf, vq_ckpt=opt.vq_ckpt, opt=opt)
+        if opt.online_sofa:
+            self.prompt_modules = []                     # ❶ keep a handle
+            for module in self.df.modules():
+                if isinstance(module, SoftPrompt3D):
+                    self.prompt_modules.append(module)   # remember it
+                    continue                             # let its params keep default requires_grad=True
+                for p in module.parameters():            # freeze everything else in UNet
+                    p.requires_grad_(False)
 
-        self.prompt_modules = []                     # ❶ keep a handle
-
-        for module in self.df.modules():
-            if isinstance(module, SoftPrompt3D):
-                self.prompt_modules.append(module)   # remember it
-                continue                             # let its params keep default requires_grad=True
-            for p in module.parameters():            # freeze everything else in UNet
+            # freeze VQVAE & modality encoders completely
+            for p in self.vqvae.parameters():
                 p.requires_grad_(False)
+            
+            # ❷ replay buffer & optimiser ................................
+            self.replay   = TopKBuffer(k=opt.top_k)
+            prm           = [p for m in self.prompt_modules for p in m.parameters()]
+            self.optimizer= optim.AdamW(prm, lr=opt.lr)
 
-        # freeze VQVAE & modality encoders completely
-        for p in self.vqvae.parameters():
-            p.requires_grad_(False)
+            #online loss
+            self.online_loss = OnlineLoss(self.df_module.ddim_sampler,
+                            self.vqvae_module)
 
         self.df.to(self.device)
         self.init_diffusion_params(scale=1, opt=opt)
@@ -498,12 +509,50 @@ class SDFusionModel(BaseModel):
     def optimize_parameters(self, total_steps):
 
         # self.set_requires_grad([self.df], requires_grad=True)
+        if not self.opt.online_sofa:
+            
+            self.forward()
+            self.optimizer.zero_grad()
+            self.backward()
+            self.optimizer.step()
+        
+        else: 
+            # -- 1. sample a latent shape ---------------------
+            with torch.no_grad():
+                latent, _ = self.df_module.ddim_sampler.sample(
+                                S      = 50,
+                                batch_size = 1,
+                                shape      = self.z_shape,
+                                conditioning= None,
+                                eta        = 0.0)
+                sdf = self.vqvae_module.decode_no_quant(latent).squeeze().cpu().numpy()
 
-        self.forward()
-        self.optimizer.zero_grad()
-        self.backward()
-        self.optimizer.step()
+            # -- 2. run SOFA, obtain bending angle ------------
+            from utils.sofa_wrapper import run_sofa_once
+            angle = run_sofa_once(self.save_tmp_mesh(sdf), pressure_bar=0.08)
+            
+            # -- 3. push into replay buffer -------------------
+            self.replay.push(angle, latent.squeeze())   # store clean z₀
 
+            # -- 4. optimise prompt on a minibatch from buffer
+            if len(self.replay) >= self.opt.buffer_batch:
+                batch = self.replay.sample(self.opt.buffer_batch)
+                loss  = 0.0
+                for _, z0 in batch:
+                    z0 = z0.to(self.device)
+                    t  = torch.randint(0, self.num_timesteps, (1,), device=self.device)
+                    eps= torch.randn_like(z0)
+                    zt = self.q_sample(z0, t, noise=eps)
+                    eps_pred = self.apply_model(zt, t, cond=None)  # frozen UNet + prompt
+                    loss     += F.mse_loss(eps_pred, eps)
+                loss /= self.opt.buffer_batch
+
+                self.optimizer.zero_grad()
+                loss.backward()          # grads flow ONLY into soft-prompt tensors
+                self.optimizer.step()
+
+            # bookkeeping for logger
+            self.loss_total = torch.tensor(angle)   # display current physical score
 
     def get_current_errors(self):
         
