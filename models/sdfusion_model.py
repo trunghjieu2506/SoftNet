@@ -78,27 +78,27 @@ class SDFusionModel(BaseModel):
 
         # init vqvae
         self.vqvae = load_vqvae(vq_conf, vq_ckpt=opt.vq_ckpt, opt=opt)
-        if opt.online_sofa:
-            self.prompt_modules = []                     # ❶ keep a handle
-            for module in self.df.modules():
-                if isinstance(module, SoftPrompt3D):
-                    self.prompt_modules.append(module)   # remember it
-                    continue                             # let its params keep default requires_grad=True
-                for p in module.parameters():            # freeze everything else in UNet
-                    p.requires_grad_(False)
-
-            # freeze VQVAE & modality encoders completely
-            for p in self.vqvae.parameters():
+        # if opt.online_sofa:
+        self.prompt_modules = []                     # ❶ keep a handle
+        for module in self.df.modules():
+            if isinstance(module, SoftPrompt3D):
+                self.prompt_modules.append(module)   # remember it
+                continue                             # let its params keep default requires_grad=True
+            for p in module.parameters():            # freeze everything else in UNet
                 p.requires_grad_(False)
-            
-            # ❷ replay buffer & optimiser ................................
-            self.replay   = TopKBuffer(k=opt.top_k)
-            prm           = [p for m in self.prompt_modules for p in m.parameters()]
-            self.optimizer= optim.AdamW(prm, lr=opt.lr)
 
-            #online loss
-            self.online_loss = OnlineLoss(self.df_module.ddim_sampler,
-                            self.vqvae_module)
+        # freeze VQVAE & modality encoders completely
+        for p in self.vqvae.parameters():
+            p.requires_grad_(False)
+        
+        # ❷ replay buffer & optimiser ................................
+        self.replay   = TopKBuffer(k=opt.top_k)
+        prm           = [p for m in self.prompt_modules for p in m.parameters()]
+        self.optimizer= optim.AdamW(prm, lr=opt.lr)
+
+        #online loss
+        self.online_loss = OnlineLoss(self.df_module.ddim_sampler,
+                        self.vqvae_module)
 
         self.df.to(self.device)
         self.init_diffusion_params(scale=1, opt=opt)
