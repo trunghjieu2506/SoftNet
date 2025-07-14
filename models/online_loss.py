@@ -1,5 +1,5 @@
 import mcubes, tempfile, subprocess, torch
-from utils.sofa_wrapper import run_sofa_once   # ← you wrap your earlier SOFA scene here
+# from utils.sofa_wrapper import run_sofa_once   # ← you wrap your earlier SOFA scene here
 
 def sdf_to_bend(sdf_vol, pressure_bar=0.08):
     verts, faces = mcubes.marching_cubes(sdf_vol, 0.0)
@@ -9,7 +9,8 @@ def sdf_to_bend(sdf_vol, pressure_bar=0.08):
     msh = f"{tmp}/geom.msh"
     subprocess.run(['gmsh', stl, '-3', '-format', 'msh2', '-o', msh,
                     '-algo', 'DelQuad'], check=True, stdout=subprocess.DEVNULL)
-    return run_sofa_once(msh, pressure_bar)      # returns bending angle (rad)
+    return 2
+    # return run_sofa_once(msh, pressure_bar)      # returns bending angle (rad)
 
 class OnlineLoss(torch.nn.Module):
     def __init__(self, sampler, vqvae):

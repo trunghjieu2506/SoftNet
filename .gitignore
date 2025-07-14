@@ -27,3 +27,7 @@ demo_data/
 # bak
 bak*/
 
+# venv
+sofa_sdf_env/
+
+
