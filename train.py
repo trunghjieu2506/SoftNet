@@ -123,7 +123,7 @@ if __name__ == "__main__":
     ckpt_path = 'saved_ckpt/sdfusion-snet-all.pth'
     opt.init_model_args(ckpt_path=ckpt_path)
     device = opt.device
-    opt.init_dset_args(dataset_mode="snet")
+    opt.init_dset_args(dataset_mode="snet", top_k = 50)
 
     # CUDA_VISIBLE_DEVICES = int(os.environ["LOCAL_RANK"]) 
     # import pdb; pdb.set_trace()
