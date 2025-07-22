@@ -89,7 +89,8 @@ class SDFusionOpt(BaseOpt):
             self,
             ckpt_path='saved_ckpt/sdfusion-snet-all.pth',
             vq_ckpt_path='saved_ckpt/vqvae-snet-all.pth',
-            top_k=50
+            top_k=50,
+            lr=0.02
         ):
         self.model = 'sdfusion'
         self.df_cfg = 'configs/sdfusion_snet.yaml'
@@ -100,6 +101,7 @@ class SDFusionOpt(BaseOpt):
         self.vq_dset = 'snet'
         self.vq_cat = 'all'
         self.top_k = top_k
+        self.lr = lr
 
     def name(self):
         return 'SDFusionTestOption'
