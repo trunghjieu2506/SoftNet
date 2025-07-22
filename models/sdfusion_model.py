@@ -91,12 +91,12 @@ class SDFusionModel(BaseModel):
         for p in self.vqvae.parameters():
             p.requires_grad_(False)
         
-        # ❷ replay buffer & optimiser ................................
+        # replay buffer & optimiser ................................
         self.replay   = TopKBuffer(k=opt.top_k)
         prm           = [p for m in self.prompt_modules for p in m.parameters()]
         self.optimizer= optim.AdamW(prm, lr=opt.lr)
 
-        #online loss
+        # online loss
         self.online_loss = OnlineLoss(self.df_module.ddim_sampler,
                         self.vqvae_module)
 

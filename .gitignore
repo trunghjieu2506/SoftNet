@@ -29,5 +29,6 @@ bak*/
 
 # venv
 sofa_sdf_env/
+train_venv/
 
 
