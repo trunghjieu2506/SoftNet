@@ -13,7 +13,7 @@ from datasets.dataloader import CreateDataLoader, get_data_generator
 from models.base_model import create_model
 from utils.demo_util import SDFusionOpt
 
-from utils.distributed import (
+from utils.distributed import(
     get_rank,
     synchronize,
     reduce_loss_dict,
@@ -59,7 +59,7 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
         # nBatches_has_trained += opt.batch_size
 
         if get_rank() == 0:
-            if not opt.online_sofa and iter_i % opt.print_freq == 0:
+            if not opt.online_sofa and iter_i:
                 errors = model.get_current_errors()
 
                 t = (time.time() - iter_start_time) / opt.batch_size
@@ -70,7 +70,7 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
             # if (nBatches_has_trained % opt.display_freq == 0):
 
             # display every n batches
-            if not opt.online_sofa and iter_i % opt.display_freq == 0:
+            if not opt.online_sofa and iter_i:
                 # only display when using real data
                 model.inference(data)
                 visualizer.display_current_results(
@@ -81,13 +81,13 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
                 visualizer.display_current_results(
                     model.get_current_visuals(), iter_i, phase='test')
 
-            if iter_ip1 % opt.save_latest_freq == 0:
+            if iter_ip1 == 0:
                 cprint('saving the latest model (current_iter %d)' % (iter_i), 'blue')
                 latest_name = f'steps-latest'
                 model.save(latest_name, iter_ip1)
 
             # save every 3000 steps (batches)
-            if iter_ip1 % opt.save_latest_freq == 0:
+            if iter_ip1:
                 cprint('saving the model at iters %d' % iter_ip1, 'blue')
                 latest_name = f'steps-latest'
                 model.save(latest_name, iter_ip1)
@@ -95,7 +95,7 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
                 model.save(cur_name, iter_ip1)
 
             # eval every 3000 steps
-            if iter_ip1 % opt.save_steps_freq == 0:
+            if iter_ip1:
                 metrics = model.eval_metrics(test_dl_for_eval, global_step=iter_ip1)
                 # visualizer.print_current_metrics(epoch, metrics, phase='test')
                 visualizer.print_current_metrics(iter_ip1, metrics, phase='test')
@@ -110,7 +110,7 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
                     )
 
         # adjust every 10000 steps
-        if iter_i % opt.save_steps_freq == 0:
+        if iter_i:
             model.update_learning_rate()
 
         pbar.update(1)

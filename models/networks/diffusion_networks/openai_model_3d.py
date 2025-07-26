@@ -26,6 +26,7 @@ from models.networks.diffusion_networks.ldm_diffusion_util import (
 
 # from external.ldm.modules.attention import SpatialTransformer, SpatialTransformer3D
 from models.networks.diffusion_networks.attention import SpatialTransformer, SpatialTransformer3D
+from .prompt import SoftPrompt3D                 
 
 
 # dummy replace
@@ -362,6 +363,33 @@ class AttentionBlock(nn.Module):
         h = self.proj_out(h)
         return (x + h).reshape(b, c, *spatial)
 
+class PromptedAttentionBlock(AttentionBlock):
+    """
+    Same math as the original self-attention, but we append L learnable
+    key/value tokens (SoftPrompt3D) to every attention call.
+    """
+    def __init__(self, *a, prompt_len=8, **kw):
+        super().__init__(*a, **kw)
+        # Soft-prompt lives on the same channel dim as the feature map
+        self.soft_prompt = SoftPrompt3D(prompt_len, self.channels)
+
+    def _forward(self, x):
+        b, c, *spatial = x.shape
+        x_flat = x.reshape(b, c, -1)                 # (B,C,T)
+        T = x_flat.shape[-1]
+
+        # -------- append prompt tokens -------------
+        p = self.soft_prompt(b)                      # (B,L,C)
+        p = p.transpose(1, 2).contiguous()           # (B,C,L)
+        x_tok = torch.cat([x_flat, p], dim=2)        # (B,C,T+L)
+        # -------------------------------------------
+
+        qkv = self.qkv(self.norm(x_tok))             # (B,3C,T+L)
+        h = self.attention(qkv)                      # (B,C,T+L)
+
+        h_main = h[:, :, :T]                         # drop prompt locations
+        h_main = self.proj_out(h_main)
+        return (x_flat + h_main).reshape(b, c, *spatial)
 
 def count_flops_attn(model, _x, y):
     """
@@ -589,8 +617,16 @@ class UNet3DModel(nn.Module):
                     if legacy:
                         #num_heads = 1
                         dim_head = ch // num_heads if use_spatial_transformer else num_head_channels
+# +    (PromptedAttentionBlock if use_soft_prompt else AttentionBlock)(
+# +         ch,
+# +         use_checkpoint=use_checkpoint,
+# +         num_heads=num_heads,
+# +         num_head_channels=dim_head,
+# +         use_new_attention_order=use_new_attention_order,
+# +         prompt_len=prompt_len                      # pass L only when needed
+# +    )
                     layers.append(
-                        AttentionBlock(
+                        PromptedAttentionBlock(
                             ch,
                             use_checkpoint=use_checkpoint,
                             num_heads=num_heads,

@@ -44,7 +44,7 @@ from models.networks.diffusion_networks.samplers.ddim import DDIMSampler
 from utils.distributed import reduce_loss_dict
 
 # rendering
-from utils.util_3d import init_mesh_renderer, render_sdf
+# from utils.util_3d import init_mesh_renderer, render_sdf
 
 class SDFusionModel(BaseModel):
     def name(self):
@@ -83,6 +83,7 @@ class SDFusionModel(BaseModel):
         for module in self.df.modules():
             if isinstance(module, SoftPrompt3D):
                 self.prompt_modules.append(module)   # remember it
+                print("there is softprompt module")
                 continue                             # let its params keep default requires_grad=True
             for p in module.parameters():            # freeze everything else in UNet
                 p.requires_grad_(False)
@@ -141,7 +142,7 @@ class SDFusionModel(BaseModel):
         elif opt.dataset_mode == 'buildingnet':
             dist, elev, azim = 1.0, 20, 20
             
-        self.renderer = init_mesh_renderer(image_size=256, dist=dist, elev=elev, azim=azim, device=self.device)
+        # self.renderer = init_mesh_renderer(image_size=256, dist=dist, elev=elev, azim=azim, device=self.device)
 
         # for distributed training
         if self.opt.distributed:
@@ -567,19 +568,19 @@ class SDFusionModel(BaseModel):
 
         return ret
 
-    def get_current_visuals(self):
+    # def get_current_visuals(self):
 
-        with torch.no_grad():
-            self.img_gen_df = render_sdf(self.renderer, self.gen_df)
+    #     with torch.no_grad():
+    #         self.img_gen_df = render_sdf(self.renderer, self.gen_df)
             
-        vis_tensor_names = [
-            'img_gen_df',
-        ]
+    #     vis_tensor_names = [
+    #         'img_gen_df',
+    #     ]
 
-        vis_ims = self.tnsrs2ims(vis_tensor_names)
-        visuals = zip(vis_tensor_names, vis_ims)
+    #     vis_ims = self.tnsrs2ims(vis_tensor_names)
+    #     visuals = zip(vis_tensor_names, vis_ims)
                             
-        return OrderedDict(visuals)
+    #     return OrderedDict(visuals)
 
     def save(self, label, global_step, save_opt=False):
 
