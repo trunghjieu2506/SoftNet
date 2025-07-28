@@ -75,6 +75,7 @@ class SDFusionOpt(BaseOpt):
         # opt.dataset_mode = 'buildingnet'
         # opt.cat = 'all'
         print(f'[*] {self.name()} initialized.')
+        self.device = 'cpu' 
         
     def init_dset_args(self, dataroot='data', dataset_mode='snet', cat='all', res=64, cached_dir=None):
         # dataset - snet
@@ -93,6 +94,7 @@ class SDFusionOpt(BaseOpt):
             lr=0.02
         ):
         self.model = 'sdfusion'
+        self.name = 'sdfusion-snet-all'
         self.df_cfg = 'configs/sdfusion_snet.yaml'
         self.ckpt = ckpt_path        
         self.vq_model = 'vqvae'
@@ -102,6 +104,8 @@ class SDFusionOpt(BaseOpt):
         self.vq_cat = 'all'
         self.top_k = top_k
         self.lr = lr
+        self.results_dir = 'saved_results'
+        
 
     def name(self):
         return 'SDFusionTestOption'

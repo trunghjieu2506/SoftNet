@@ -83,11 +83,17 @@ class SDFusionModel(BaseModel):
         for module in self.df.modules():
             if isinstance(module, SoftPrompt3D):
                 self.prompt_modules.append(module)   # remember it
-                print("there is softprompt module")
-                continue                             # let its params keep default requires_grad=True
-            for p in module.parameters():            # freeze everything else in UNet
-                p.requires_grad_(False)
-
+                for p in module.parameters():            # freeze everything else in UNet
+                    p.requires_grad_(True)   
+                continue
+            else:                             # let its params keep default requires_grad=True
+                for p in module.parameters():            # freeze everything else in UNet
+                    p.requires_grad_(False)        
+        total = sum(p.numel() for p in self.df.parameters())
+        train  = sum(p.numel() for p in self.df.parameters() if p.requires_grad)
+        soft_prompt_param = sum(p.numel() for m in self.prompt_modules for p in m.parameters())
+        print(f'soft_prompt {soft_prompt_param} / trainable {train} M  /  total {total/1e6:.1f} M')
+        
         # freeze VQVAE & modality encoders completely
         for p in self.vqvae.parameters():
             p.requires_grad_(False)
@@ -97,9 +103,9 @@ class SDFusionModel(BaseModel):
         prm           = [p for m in self.prompt_modules for p in m.parameters()]
         self.optimizer= optim.AdamW(prm, lr=opt.lr)
 
-        # online loss
-        self.online_loss = OnlineLoss(self.df_module.ddim_sampler,
-                        self.vqvae_module)
+        # # online loss
+        # self.online_loss = OnlineLoss(ddim_sampler,
+        #                 self.vqvae_module)
 
         self.df.to(self.device)
         self.init_diffusion_params(scale=1, opt=opt)
@@ -126,13 +132,6 @@ class SDFusionModel(BaseModel):
             if self.isTrain:
                 self.optimizers = [self.optimizer]
             # self.schedulers = [self.scheduler]
-
-        total, trainable = 0, 0
-        for n, p in self.named_parameters():
-            total += p.numel()
-            if p.requires_grad:
-                trainable += p.numel()
-        print(f"[Prompt-tune] trainable {trainable/1e6:.3f} M  /  total {total/1e6:.1f} M")
 
         # setup renderer
         if 'snet' in opt.dataset_mode:
@@ -510,7 +509,7 @@ class SDFusionModel(BaseModel):
     def optimize_parameters(self, total_steps):
 
         # self.set_requires_grad([self.df], requires_grad=True)
-        if not self.opt.online_sofa:
+        if not True: # self.opt.online_sofa:
             
             self.forward()
             self.optimizer.zero_grad()
@@ -519,8 +518,9 @@ class SDFusionModel(BaseModel):
         
         else: 
             # -- 1. sample a latent shape ---------------------
+            ddim_sampler = DDIMSampler(self)
             with torch.no_grad():
-                latent, _ = self.df_module.ddim_sampler.sample(
+                latent, _ = ddim_sampler.sample(
                                 S      = 50,
                                 batch_size = 1,
                                 shape      = self.z_shape,
@@ -530,15 +530,17 @@ class SDFusionModel(BaseModel):
 
             # -- 2. run SOFA, obtain bending angle ------------
             from utils.sofa_wrapper import run_sofa_once
-            angle = run_sofa_once(self.save_tmp_mesh(sdf), pressure_bar=0.08)
+            angle = 20
             
             # -- 3. push into replay buffer -------------------
             self.replay.push(angle, latent.squeeze())   # store clean z₀
-
+            
+            buffer_batch = 50
             # -- 4. optimise prompt on a minibatch from buffer
-            if len(self.replay) >= self.opt.buffer_batch:
-                batch = self.replay.sample(self.opt.buffer_batch)
+            if len(self.replay) >= buffer_batch:
+                batch = self.replay.sample(buffer_batch)
                 loss  = 0.0
+
                 for _, z0 in batch:
                     z0 = z0.to(self.device)
                     t  = torch.randint(0, self.num_timesteps, (1,), device=self.device)
@@ -546,6 +548,7 @@ class SDFusionModel(BaseModel):
                     zt = self.q_sample(z0, t, noise=eps)
                     eps_pred = self.apply_model(zt, t, cond=None)  # frozen UNet + prompt
                     loss     += F.mse_loss(eps_pred, eps)
+
                 loss /= self.opt.buffer_batch
 
                 self.optimizer.zero_grad()
@@ -607,7 +610,7 @@ class SDFusionModel(BaseModel):
             state_dict = ckpt
 
         self.vqvae.load_state_dict(state_dict['vqvae'])
-        self.df.load_state_dict(state_dict['df'])
+        self.df.load_state_dict(state_dict['df'], strict=False)
         print(colored('[*] weight successfully load from: %s' % ckpt, 'blue'))
 
         if load_opt:

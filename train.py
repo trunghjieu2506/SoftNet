@@ -35,7 +35,7 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
     epoch = 0
 
     # get n_epochs here
-    # opt.total_iters = 100000000
+    opt.total_iters = 100000000
     # pbar = tqdm(range(opt.total_iters))
     pbar = tqdm(total=opt.total_iters)
 
@@ -48,13 +48,8 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
         if get_rank() == 0:
             visualizer.reset()
         
-        if opt.online_sofa:
-            # ignore the dataset, run SOFA-based optimize_parameters()
-            model.optimize_parameters(iter_i)
-        else:
-            data = next(train_dg)
-            model.set_input(data)
-            model.optimize_parameters(iter_i)
+        # ignore the dataset, run SOFA-based optimize_parameters()
+        model.optimize_parameters(iter_i)
 
         # nBatches_has_trained += opt.batch_size
 
@@ -155,25 +150,25 @@ if __name__ == "__main__":
     if get_rank() == 0:
         visualizer.setup_io()
 
-    # save model and dataset files
-    if get_rank() == 0:
-        expr_dir = '%s/%s' % (opt.logs_dir, opt.name)
-        model_f = inspect.getfile(model.__class__)
-        dset_f = inspect.getfile(train_ds.__class__)
-        cprint(f'[*] saving model and dataset files: {model_f}, {dset_f}', 'blue')
-        modelf_out = os.path.join(expr_dir, os.path.basename(model_f))
-        dsetf_out = os.path.join(expr_dir, os.path.basename(dset_f))
-        os.system(f'cp {model_f} {modelf_out}')
-        os.system(f'cp {dset_f} {dsetf_out}')
+    # # save model and dataset files
+    # if get_rank() == 0:
+    #     expr_dir = '%s/%s' % (opt.logs_dir, opt.name)
+    #     model_f = inspect.getfile(model.__class__)
+    #     dset_f = inspect.getfile(train_ds.__class__)
+    #     cprint(f'[*] saving model and dataset files: {model_f}, {dset_f}', 'blue')
+    #     modelf_out = os.path.join(expr_dir, os.path.basename(model_f))
+    #     dsetf_out = os.path.join(expr_dir, os.path.basename(dset_f))
+    #     os.system(f'cp {model_f} {modelf_out}')
+    #     os.system(f'cp {dset_f} {dsetf_out}')
 
-        if opt.vq_cfg is not None:
-            vq_cfg = opt.vq_cfg
-            cfg_out = os.path.join(expr_dir, os.path.basename(vq_cfg))
-            os.system(f'cp {vq_cfg} {cfg_out}')
+    #     if opt.vq_cfg is not None:
+    #         vq_cfg = opt.vq_cfg
+    #         cfg_out = os.path.join(expr_dir, os.path.basename(vq_cfg))
+    #         os.system(f'cp {vq_cfg} {cfg_out}')
             
-        if opt.df_cfg is not None:
-            df_cfg = opt.df_cfg
-            cfg_out = os.path.join(expr_dir, os.path.basename(df_cfg))
-            os.system(f'cp {df_cfg} {cfg_out}')
+    #     if opt.df_cfg is not None:
+    #         df_cfg = opt.df_cfg
+    #         cfg_out = os.path.join(expr_dir, os.path.basename(df_cfg))
+    #         os.system(f'cp {df_cfg} {cfg_out}')
 
     train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualizer, device)
