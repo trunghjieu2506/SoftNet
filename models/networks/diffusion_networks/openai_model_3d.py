@@ -379,7 +379,7 @@ class PromptedAttentionBlock(AttentionBlock):
         T = x_flat.shape[-1]
 
         # -------- append prompt tokens -------------
-        p = self.soft_prompt(b)                      # (B,L,C)
+        p = self.soft_prompt(b)                     # (B,L,C)
         p = p.transpose(1, 2).contiguous()           # (B,C,L)
         x_tok = torch.cat([x_flat, p], dim=2)        # (B,C,T+L)
         # -------------------------------------------

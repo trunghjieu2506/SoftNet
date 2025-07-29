@@ -8,9 +8,5 @@ class SoftPrompt3D(nn.Module):
             torch.randn(m_tokens, d_model) * 0.02  # small init
         )
 
-    def forward(self, k, v, B):
-        # repeat prompt across batch and concat to K,V
-        p = self.bank.unsqueeze(0).expand(B, -1, -1)   # (B, m, d)
-        k = torch.cat([k, p], dim=1)
-        v = torch.cat([v, p], dim=1)
-        return k, v
+    def forward(self, batch_size:int):
+        return self.bank.unsqueeze(0).expand(batch_size, -1, -1)
