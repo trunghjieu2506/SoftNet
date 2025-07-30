@@ -521,7 +521,7 @@ class SDFusionModel(BaseModel):
             ddim_sampler = DDIMSampler(self)
             with torch.no_grad():
                 latent, _ = ddim_sampler.sample(
-                                S      = 50,
+                                S      = 1,
                                 batch_size = 1,
                                 shape      = self.z_shape,
                                 conditioning= None,
@@ -529,7 +529,7 @@ class SDFusionModel(BaseModel):
                 sdf = self.vqvae_module.decode_no_quant(latent).squeeze().cpu().numpy()
 
             # -- 2. run SOFA, obtain bending angle ------------
-            from utils.sofa_wrapper import run_sofa_once
+            # from utils.sofa_wrapper import run_sofa_once
             angle = 20
             
             # -- 3. push into replay buffer -------------------
