@@ -521,7 +521,7 @@ class SDFusionModel(BaseModel):
             ddim_sampler = DDIMSampler(self)
             with torch.no_grad():
                 latent, _ = ddim_sampler.sample(
-                                S      = 1,
+                                S      = 50,
                                 batch_size = 1,
                                 shape      = self.z_shape,
                                 conditioning= None,
