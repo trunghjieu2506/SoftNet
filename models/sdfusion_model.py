@@ -522,7 +522,7 @@ class SDFusionModel(BaseModel):
             with torch.no_grad():
                 latent, _ = ddim_sampler.sample(
                                 S      = 50,
-                                batch_size = 1,
+                                batch_size = 4,
                                 shape      = self.z_shape,
                                 conditioning= None,
                                 eta        = 0.0)
@@ -530,7 +530,7 @@ class SDFusionModel(BaseModel):
 
             # -- 2. run SOFA, obtain bending angle ------------
             # from utils.sofa_wrapper import run_sofa_once
-            angle = 20
+            angle = [20 for i in latent]
             
             # -- 3. push into replay buffer -------------------
             self.replay.push(angle, latent.squeeze())   # store clean z₀
