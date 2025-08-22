@@ -1,0 +1,23 @@
+# Git info for SofaPython3
+
+## Current commit
+## git rev-parse --abbrev-ref HEAD
+aa0ccbe3c900926772ede82b994b67a4c73fbc37
+
+## Branches containing current commit
+## git branch -a --contains aa0ccbe3c900926772ede82b994b67a4c73fbc37 
+* (HEAD detached at origin/v24.12)
+  remotes/origin/v24.12
+
+## Remotes
+## git remote -vv 
+origin	https://github.com/sofa-framework/SofaPython3 (fetch)
+origin	https://github.com/sofa-framework/SofaPython3 (push)
+
+## More info
+## git log --pretty -n 1
+commit aa0ccbe3c900926772ede82b994b67a4c73fbc37
+Author: Frederick Roy <fredroy@users.noreply.github.com>
+Date:   Wed Dec 18 18:01:08 2024 +0900
+
+    add initRoot binding (#472)

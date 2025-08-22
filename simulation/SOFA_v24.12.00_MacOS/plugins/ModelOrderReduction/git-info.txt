@@ -1,0 +1,23 @@
+# Git info for ModelOrderReduction
+
+## Current commit
+## git rev-parse --abbrev-ref HEAD
+2fd2f4c669469163c3de5aa4c8df96c2b2c37689
+
+## Branches containing current commit
+## git branch -a --contains 2fd2f4c669469163c3de5aa4c8df96c2b2c37689 
+* (HEAD detached at origin/v24.12)
+  remotes/origin/v24.12
+
+## Remotes
+## git remote -vv 
+origin	https://github.com/SofaDefrost/ModelOrderReduction (fetch)
+origin	https://github.com/SofaDefrost/ModelOrderReduction (push)
+
+## More info
+## git log --pretty -n 1
+commit 2fd2f4c669469163c3de5aa4c8df96c2b2c37689
+Author: Paul Baksic <30337881+bakpaul@users.noreply.github.com>
+Date:   Fri Dec 20 11:34:18 2024 +0100
+
+    [CI] Update workflow to match branch name (#147)

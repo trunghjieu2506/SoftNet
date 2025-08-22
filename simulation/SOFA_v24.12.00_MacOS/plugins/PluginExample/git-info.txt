@@ -1,0 +1,25 @@
+# Git info for PluginExample
+
+## Current commit
+## git rev-parse --abbrev-ref HEAD
+3e1e446d51c9dba4bc1efdc2e03bf1e728a6094e
+
+## Branches containing current commit
+## git branch -a --contains 3e1e446d51c9dba4bc1efdc2e03bf1e728a6094e 
+* (HEAD detached at origin/v24.12)
+  remotes/origin/v24.12
+
+## Remotes
+## git remote -vv 
+origin	https://github.com/sofa-framework/PluginExample (fetch)
+origin	https://github.com/sofa-framework/PluginExample (push)
+
+## More info
+## git log --pretty -n 1
+commit 3e1e446d51c9dba4bc1efdc2e03bf1e728a6094e
+Author: Paul Baksic <30337881+bakpaul@users.noreply.github.com>
+Date:   Mon Jan 6 09:51:57 2025 +0100
+
+    [CI] Update workflow to match branch name (#9)
+    
+    Co-authored-by: Hugo <hugo.talbot@sofa-framework.org>

@@ -1,0 +1,23 @@
+# Git info for InfinyToolkit
+
+## Current commit
+## git rev-parse --abbrev-ref HEAD
+5c4445273daa06ac5ead77da4d630f203b989fcd
+
+## Branches containing current commit
+## git branch -a --contains 5c4445273daa06ac5ead77da4d630f203b989fcd 
+* (HEAD detached at 5c44452)
+  remotes/origin/v24.12
+
+## Remotes
+## git remote -vv 
+origin	https://github.com/InfinyTech3D/InfinyToolkit.git (fetch)
+origin	https://github.com/InfinyTech3D/InfinyToolkit.git (push)
+
+## More info
+## git log --pretty -n 1
+commit 5c4445273daa06ac5ead77da4d630f203b989fcd
+Author: epernod <erik.pernod@gmail.com>
+Date:   Sun Dec 22 17:09:52 2024 +0100
+
+    [src] Fix Burning manager texcoord computation

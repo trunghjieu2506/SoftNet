@@ -1,0 +1,26 @@
+# Git info for STLIB
+
+## Current commit
+## git rev-parse --abbrev-ref HEAD
+ab95265366821f399ba69d461243d76a64ff59eb
+
+## Branches containing current commit
+## git branch -a --contains ab95265366821f399ba69d461243d76a64ff59eb 
+* (HEAD detached at origin/v24.12)
+  remotes/origin/v24.12
+
+## Remotes
+## git remote -vv 
+origin	https://github.com/SofaDefrost/STLIB (fetch)
+origin	https://github.com/SofaDefrost/STLIB (push)
+
+## More info
+## git log --pretty -n 1
+commit ab95265366821f399ba69d461243d76a64ff59eb
+Merge: c37d478 67ab31e
+Author: Hugo <hugo.talbot@sofa-framework.org>
+Date:   Sun Jan 5 21:51:33 2025 +0100
+
+    Merge pull request #128 from SofaDefrost/v24.12_update_workflow
+    
+    [CI] Update workflow to match branch name

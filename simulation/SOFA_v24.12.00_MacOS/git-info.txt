@@ -1,0 +1,27 @@
+# Git info for SofaValidation
+
+## Current commit
+## git rev-parse --abbrev-ref HEAD
+0abe9f644fbf2595d3a02602f501cb5be1e9532e
+
+## Branches containing current commit
+## git branch -a --contains 0abe9f644fbf2595d3a02602f501cb5be1e9532e 
+* master
+  remotes/origin/HEAD -> origin/master
+  remotes/origin/master
+
+## Remotes
+## git remote -vv 
+origin	https://github.com/sofa-framework/SofaValidation (fetch)
+origin	https://github.com/sofa-framework/SofaValidation (push)
+
+## More info
+## git log --pretty -n 1
+commit 0abe9f644fbf2595d3a02602f501cb5be1e9532e
+Merge: 61ecdca 64e996d
+Author: Frederick Roy <fredroy@users.noreply.github.com>
+Date:   Wed Apr 23 08:31:39 2025 +0900
+
+    Merge pull request #3 from alxbilger/addsomeexamples
+    
+    Add examples coming from SOFA repository
