@@ -36,6 +36,7 @@ axis_vector = np.array([0, 0, -120])
 # Trim arrays to match the length of time
 resultant_disp = resultant_disp[:len(time)]
 resultant_force = resultant_force[:len(time)]
+# send back up to the training routine 
 print("max result force", np.max(resultant_force))
 
 # Compute Bending Angle
