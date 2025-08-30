@@ -6,6 +6,21 @@ def load_data(filename):
     data = np.genfromtxt(filename, delimiter=None, skip_header=2)  # Auto-detect delimiter
     return data
 
+def cal_resultant_force(position_file, force_file):
+    positions = load_data(position_file)
+    forces = load_data(force_file)
+        # Ensure both have the same length
+
+    # Extract time and values
+    time = positions[:, 0]  # First column is the timestamp
+    x_force, y_force, z_force = forces[:, 1], forces[:, 2], forces[:, 3]
+
+    # Compute Resultant Force
+    resultant_force = np.sqrt(x_force**2 + y_force**2 + z_force**2)
+    resultant_force = resultant_force[:len(time)]
+    return max(resultant_force)
+
+
 # Load data from generated .txt files
 positions = load_data(r"/Users/trunghjieu/Desktop/SSLSoftneet/simulation/SOFA_v24.12.00_MacOS/fingerMonitorA_x.txt")
 positionsB = load_data(r"/Users/trunghjieu/Desktop/SSLSoftneet/simulation/SOFA_v24.12.00_MacOS/fingerMonitorB_x.txt")
@@ -28,6 +43,7 @@ resultant_disp = np.sqrt(x_pos**2 + y_pos**2 + z_pos**2)
 
 # Compute Resultant Force
 resultant_force = np.sqrt(x_force**2 + y_force**2 + z_force**2)
+
 
 # take the perpendicular vector of the top surface, (x_pos - 10, 0, 0)
 top_surface_vector = -1 * np.column_stack((x_posB - x_pos, y_posB - y_pos, z_posB - z_pos))

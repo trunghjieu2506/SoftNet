@@ -116,7 +116,7 @@ if __name__ == "__main__":
     seed = 2023
     opt = SDFusionOpt(seed=seed)
     ckpt_path = 'saved_ckpt/sdfusion-snet-all.pth'
-    opt.init_model_args(ckpt_path=ckpt_path, top_k=50, lr=0.02)
+    opt.init_model_args(ckpt_path=ckpt_path, top_k=10, lr=0.02)
     device = opt.device
     opt.init_dset_args(dataset_mode="snet")
 

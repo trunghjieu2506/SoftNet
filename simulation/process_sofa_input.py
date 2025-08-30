@@ -294,13 +294,13 @@ def extract_surfaces_from_sdf(
     # if invert_sign:
     #     sdf = -sdf
     
-    xs, ys, zs = cal_band
-    dx = xs[1] - xs[0] if xs.size > 1 else 1.0
-    dy = ys[1] - ys[0] if ys.size > 1 else 1.0
-    dz = zs[1] - zs[0] if zs.size > 1 else 1.0
-    band = 0.5 * min(dx, dy, dz)  # thin shell ≈ surface
+    # xs, ys, zs = cal_band
+    # dx = xs[1] - xs[0] if xs.size > 1 else 1.0
+    # dy = ys[1] - ys[0] if ys.size > 1 else 1.0
+    # dz = zs[1] - zs[0] if zs.size > 1 else 1.0
+    # band = 0.5 * min(dx, dy, dz)  # thin shell ≈ surface
     # solid/air masks from sign
-    exterior_air = np.abs(sdf) <= band
+    exterior_air = sdf <= 0
     interior_air = exterior_air & (sdf >= 0)   # air-side of the surface only
 
     # air = ~solid
@@ -324,8 +324,8 @@ def extract_surfaces_from_sdf(
     # marching cubes
     outer_V, outer_F = _marching_cubes_boolean(exterior_air, voxel_size, origin)
     outer_V, outer_F = _postprocess_surface(outer_V, outer_F, smooth_iters=4, target_reduction=0.5)
-    inner_V, inner_F = _marching_cubes_boolean(interior_air, voxel_size, origin)
-    inner_V, inner_F = _postprocess_surface(outer_V, outer_F, smooth_iters=4, target_reduction=0.5)
+    # inner_V, inner_F = _marching_cubes_boolean(interior_air, voxel_size, origin)
+    # inner_V, inner_F = _postprocess_surface(outer_V, outer_F, smooth_iters=4, target_reduction=0.5)
 
     if clean_outer:
         mout = trimesh.Trimesh(outer_V, outer_F, process=False)  # <- no heavy global processing
@@ -348,7 +348,7 @@ def extract_surfaces_from_sdf(
     #     V, F = _marching_cubes_boolean(cav_iface, voxel_size, origin)
     #     V, F = _postprocess_surface(V, F, smooth_iters=4, target_reduction=0.5)
     #     cavity_meshes.append((V, F))
-    return outer_V, outer_F, inner_V, inner_F
+    return outer_V, outer_F
 
 # def extract_surfaces_from_sdf(
 #     sdf: np.ndarray,
@@ -600,7 +600,7 @@ def export_sdf_volume_to_sofa(
 
     # 1) surfaces from SDF
     # 1) surfaces (fast MC + crop)
-    outer_V, outer_F, inner_V, inner_F = extract_surfaces_from_sdf(
+    outer_V, outer_F= extract_surfaces_from_sdf(
         sdf, cal_band, voxel_size, origin, invert_sign=invert_sign, clean_outer=clean_outer
     )
 

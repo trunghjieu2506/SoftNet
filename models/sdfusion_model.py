@@ -44,7 +44,8 @@ from models.networks.diffusion_networks.samplers.ddim import DDIMSampler
 from utils.distributed import reduce_loss_dict
 
 # rendering
-# from utils.util_3d import init_mesh_renderer, render_sdf
+from utils.util_3d import init_mesh_renderer, render_sdf
+from simulation.run_simulation import run_simulation
 
 class SDFusionModel(BaseModel):
     def name(self):
@@ -55,8 +56,17 @@ class SDFusionModel(BaseModel):
         self.isTrain = opt.isTrain
         self.model_name = self.name()
         self.device = opt.device
-
         
+        # setup renderer
+        if 'snet' in opt.dataset_mode:
+            dist, elev, azim = 1.7, 20, 20
+        elif 'pix3d' in opt.dataset_mode:
+            dist, elev, azim = 1.7, 20, 20
+        elif opt.dataset_mode == 'buildingnet':
+            dist, elev, azim = 1.0, 20, 20
+            
+        self.renderer = init_mesh_renderer(image_size=256, dist=dist, elev=elev, azim=azim, device=self.device)
+
         ######## START: Define Networks ########
         assert opt.df_cfg is not None
         assert opt.vq_cfg is not None
@@ -132,16 +142,6 @@ class SDFusionModel(BaseModel):
             if self.isTrain:
                 self.optimizers = [self.optimizer]
             # self.schedulers = [self.scheduler]
-
-        # setup renderer
-        if 'snet' in opt.dataset_mode:
-            dist, elev, azim = 1.7, 20, 20
-        elif 'pix3d' in opt.dataset_mode:
-            dist, elev, azim = 1.7, 20, 20
-        elif opt.dataset_mode == 'buildingnet':
-            dist, elev, azim = 1.0, 20, 20
-            
-        # self.renderer = init_mesh_renderer(image_size=256, dist=dist, elev=elev, azim=azim, device=self.device)
 
         # for distributed training
         if self.opt.distributed:
@@ -506,7 +506,7 @@ class SDFusionModel(BaseModel):
 
         self.loss.backward()
 
-    def optimize_parameters(self, total_steps):
+    def optimize_parameters(self, total_steps, top_k=10):
 
         # self.set_requires_grad([self.df], requires_grad=True)
         if not True: # self.opt.online_sofa:
@@ -521,21 +521,22 @@ class SDFusionModel(BaseModel):
             ddim_sampler = DDIMSampler(self)
             with torch.no_grad():
                 latent, _ = ddim_sampler.sample(
-                                S      = 50,
+                                S      = 1,
                                 batch_size = 4,
                                 shape      = self.z_shape,
                                 conditioning= None,
                                 eta        = 0.0)
                 sdf = self.vqvae_module.decode_no_quant(latent).squeeze().cpu().numpy()
+                
 
             # -- 2. run SOFA, obtain bending angle ------------
             # from utils.sofa_wrapper import run_sofa_once
-            angle = [20 for i in latent]
+            angle = [run_simulation(sdf_i) for sdf_i in sdf]  # dummy angle, for now
             
             # -- 3. push into replay buffer -------------------
             self.replay.push(angle, latent.squeeze())   # store clean z₀
             
-            buffer_batch = 50
+            buffer_batch = top_k
             # -- 4. optimise prompt on a minibatch from buffer
             if len(self.replay) >= buffer_batch:
                 batch = self.replay.sample(buffer_batch)
@@ -571,19 +572,19 @@ class SDFusionModel(BaseModel):
 
         return ret
 
-    # def get_current_visuals(self):
+    def get_current_visuals(self):
 
-    #     with torch.no_grad():
-    #         self.img_gen_df = render_sdf(self.renderer, self.gen_df)
+        with torch.no_grad():
+            self.img_gen_df = render_sdf(self.renderer, self.gen_df)
             
-    #     vis_tensor_names = [
-    #         'img_gen_df',
-    #     ]
+        vis_tensor_names = [
+            'img_gen_df',
+        ]
 
-    #     vis_ims = self.tnsrs2ims(vis_tensor_names)
-    #     visuals = zip(vis_tensor_names, vis_ims)
+        vis_ims = self.tnsrs2ims(vis_tensor_names)
+        visuals = zip(vis_tensor_names, vis_ims)
                             
-    #     return OrderedDict(visuals)
+        return OrderedDict(visuals)
 
     def save(self, label, global_step, save_opt=False):
 

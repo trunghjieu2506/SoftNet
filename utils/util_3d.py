@@ -197,7 +197,7 @@ def sdf_to_mesh(sdf, level=0.02, color=None, render_all=False):
 
     # extract meshes from sdf
     n_cell = sdf.shape[-1]
-    bs, nc = sdf.shape[:2]
+    bs, nc = sdf.shape[:2] 
 
     assert nc == 1
 
