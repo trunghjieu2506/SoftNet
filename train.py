@@ -49,12 +49,12 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
             visualizer.reset()
         
         # ignore the dataset, run SOFA-based optimize_parameters()
-        model.optimize_parameters(iter_i)
+        model.optimize_parameters(iter_i, top_k=1)
 
         # nBatches_has_trained += opt.batch_size
 
         if get_rank() == 0:
-            if not opt.online_sofa and iter_i:
+            if iter_i:
                 errors = model.get_current_errors()
 
                 t = (time.time() - iter_start_time) / opt.batch_size
@@ -64,17 +64,17 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
             # if ((nBatches_has_trained % opt.display_freq == 0) or idx == 0):
             # if (nBatches_has_trained % opt.display_freq == 0):
 
-            # display every n batches
-            if not opt.online_sofa and iter_i:
-                # only display when using real data
-                model.inference(data)
-                visualizer.display_current_results(
-                    model.get_current_visuals(), iter_i, phase='train')
+            # # display every n batches
+            # if not opt.online_sofa and iter_i:
+            #     # only display when using real data
+            #     model.inference(data)
+            #     visualizer.display_current_results(
+            #         model.get_current_visuals(), iter_i, phase='train')
 
-                test_data = next(test_dg)
-                model.inference(test_data)
-                visualizer.display_current_results(
-                    model.get_current_visuals(), iter_i, phase='test')
+            #     test_data = next(test_dg)
+            #     model.inference(test_data)
+            #     visualizer.display_current_results(
+            #         model.get_current_visuals(), iter_i, phase='test')
 
             if iter_ip1 == 0:
                 cprint('saving the latest model (current_iter %d)' % (iter_i), 'blue')
