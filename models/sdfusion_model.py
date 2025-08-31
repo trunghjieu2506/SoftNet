@@ -111,6 +111,8 @@ class SDFusionModel(BaseModel):
         # replay buffer & optimiser ................................
         self.replay   = TopKBuffer(k=opt.top_k)
         prm           = [p for m in self.prompt_modules for p in m.parameters()]
+        for i in prm:
+            assert i.requires_grad
         self.optimizer= optim.AdamW(prm, lr=opt.lr)
 
         # # online loss
@@ -506,7 +508,7 @@ class SDFusionModel(BaseModel):
 
         self.loss.backward()
 
-    def optimize_parameters(self, total_steps, top_k=10):
+    def optimize_parameters(self, total_steps, top_k=10, batch_size=1):
 
         # self.set_requires_grad([self.df], requires_grad=True)
         if not True: # self.opt.online_sofa:
@@ -522,11 +524,13 @@ class SDFusionModel(BaseModel):
             with torch.no_grad():
                 latent, _ = ddim_sampler.sample(
                                 S      = 1,
-                                batch_size = 4,
+                                batch_size = batch_size,
                                 shape      = self.z_shape,
                                 conditioning= None,
                                 eta        = 0.0)
                 sdf = self.vqvae_module.decode_no_quant(latent).squeeze().cpu().numpy()
+                if batch_size == 1:
+                    sdf = [sdf]
                 
 
             # -- 2. run SOFA, obtain bending angle ------------
