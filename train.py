@@ -82,7 +82,7 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
                 model.save(latest_name, iter_ip1)
 
             # save every 3000 steps (batches)
-            if iter_ip1:
+            if iter_ip1 & 3000 == 0:
                 cprint('saving the model at iters %d' % iter_ip1, 'blue')
                 latest_name = f'steps-latest'
                 model.save(latest_name, iter_ip1)
@@ -92,7 +92,6 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
             # eval every 3000 steps
             if iter_ip1:
                 metrics = model.eval_metrics(test_dl_for_eval, global_step=iter_ip1)
-                # visualizer.print_current_metrics(epoch, metrics, phase='test')
                 visualizer.print_current_metrics(iter_ip1, metrics, phase='test')
                 # print(metrics)
                 

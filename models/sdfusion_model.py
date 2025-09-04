@@ -89,16 +89,13 @@ class SDFusionModel(BaseModel):
         # init vqvae
         self.vqvae = load_vqvae(vq_conf, vq_ckpt=opt.vq_ckpt, opt=opt)
         # if opt.online_sofa:
+        self.df.requires_grad_(False)  # freeze UNet except prompt
         self.prompt_modules = []                     # ❶ keep a handle
         for module in self.df.modules():
             if isinstance(module, SoftPrompt3D):
                 self.prompt_modules.append(module)   # remember it
-                for p in module.parameters():            # freeze everything else in UNet
-                    p.requires_grad_(True)   
-                continue
-            else:                             # let its params keep default requires_grad=True
-                for p in module.parameters():            # freeze everything else in UNet
-                    p.requires_grad_(False)        
+                module.requires_grad_(True)  # unfreeze prompt
+             
         total = sum(p.numel() for p in self.df.parameters())
         train  = sum(p.numel() for p in self.df.parameters() if p.requires_grad)
         soft_prompt_param = sum(p.numel() for m in self.prompt_modules for p in m.parameters())
@@ -114,7 +111,9 @@ class SDFusionModel(BaseModel):
         for i in prm:
             assert i.requires_grad
         self.optimizer= optim.AdamW(prm, lr=opt.lr)
-
+        self.scheduler= optim.lr_scheduler.StepLR(self.optimizer, 1000, 0.9)
+        self.optimizers = [self.optimizer]
+        self.schedulers = [self.scheduler]
         # # online loss
         # self.online_loss = OnlineLoss(ddim_sampler,
         #                 self.vqvae_module)
@@ -538,7 +537,7 @@ class SDFusionModel(BaseModel):
             angle = [run_simulation(sdf_i) for sdf_i in sdf]  # dummy angle, for now
             
             # -- 3. push into replay buffer -------------------
-            self.replay.push(angle, latent.squeeze())   # store clean z₀
+            self.replay.push(angle, latent)   # store clean z₀
             
             buffer_batch = top_k
             # -- 4. optimise prompt on a minibatch from buffer
@@ -554,14 +553,37 @@ class SDFusionModel(BaseModel):
                     eps_pred = self.apply_model(zt, t, cond=None)  # frozen UNet + prompt
                     loss     += F.mse_loss(eps_pred, eps)
 
-                loss /= self.opt.buffer_batch
+                loss /= buffer_batch
+
+                loss_dict = {}
+                loss_simple = loss
+                loss_dict.update({f'loss_simple': loss_simple.mean()})
+
+                logvar_t = self.logvar[t].to(self.device)
+                loss_v = loss_simple / torch.exp(logvar_t) + logvar_t
+                if self.learn_logvar:
+                    loss_dict.update({f'loss_gamma': loss_v.mean()})
+                    loss_dict.update({'logvar': self.logvar.data.mean()})
+
+                loss_v = self.l_simple_weight * loss_v.mean()
+
+                loss_vlb = loss
+                loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
+                loss_dict.update({f'loss_vlb': loss_vlb})
+                loss_v += (self.original_elbo_weight * loss_vlb)
+                loss_dict.update({f'loss_total': loss_v.clone().detach().mean()})
+                self.loss_dict = loss_dict
+                self.loss_dict = reduce_loss_dict(self.loss_dict)
+                self.loss_total = self.loss_dict['loss_total']
+                self.loss_simple = self.loss_dict['loss_simple']
+                self.loss_vlb = self.loss_dict['loss_vlb']
 
                 self.optimizer.zero_grad()
                 loss.backward()          # grads flow ONLY into soft-prompt tensors
                 self.optimizer.step()
 
             # bookkeeping for logger
-            self.loss_total = torch.tensor(angle)   # display current physical score
+            # self.loss_total = torch.tensor(angle)   # display current physical score
 
     def get_current_errors(self):
         

@@ -13,6 +13,7 @@ from datasets.dataloader import CreateDataLoader, get_data_generator
 from models.base_model import create_model
 
 from utils.util import seed_everything
+from torch.utils.tensorboard import SummaryWriter
 
 def tensor_to_pil(tensor):
     # """ assume shape: c h w """
@@ -47,7 +48,7 @@ class BaseOpt(object):
         if seed is not None:
             seed_everything(seed)
             
-        self.phase = 'test'
+        # self.phase = 'test'
 
     def name(self):
 
@@ -103,9 +104,28 @@ class SDFusionOpt(BaseOpt):
         self.vq_dset = 'snet'
         self.vq_cat = 'all'
         self.top_k = top_k
+        self.logs_dir = 'logs'
         self.lr = lr
         self.results_dir = 'saved_results'
+        import os 
+        import utils
+
+        # make experiment dir
+        expr_dir = os.path.join(self.logs_dir, self.name)
+        utils.util.mkdirs(expr_dir)
         
+        ckpt_dir = os.path.join(self.logs_dir, self.name, 'ckpt')
+        if not os.path.exists(ckpt_dir):
+            os.makedirs(ckpt_dir)
+        self.ckpt_dir = ckpt_dir
+        
+        # tensorboard writer
+        tb_dir = '%s/tboard' % expr_dir
+        if not os.path.exists(tb_dir):
+            os.makedirs(tb_dir)
+        self.opt.tb_dir = tb_dir
+        writer = SummaryWriter(log_dir=tb_dir)
+        self.opt.writer = writer
 
     def name(self):
         return 'SDFusionTestOption'
