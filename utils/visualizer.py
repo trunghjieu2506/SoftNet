@@ -67,7 +67,7 @@ class Visualizer():
         util.mkdirs([self.img_dir])
         # self.log_name = os.path.join(opt.checkpoints_dir, opt.name, 'loss_log.txt')
 
-        if self.isTrain:
+        if True:
             self.log_name = os.path.join(self.log_dir, 'loss_log.txt')
             # with open(self.log_name, "a") as log_file:
             with open(self.log_name, "w") as log_file:
@@ -80,7 +80,7 @@ class Visualizer():
     def print_current_errors(self, current_iters, errors, t):
         # message = '(GPU: %s, epoch: %d, iters: %d, time: %.3f) ' % (self.opt.gpu_ids_str, t)
         # message = f"[{self.opt.exp_time}] (GPU: {self.opt.gpu_ids_str}, iters: {current_iters}, time: {t:.3f}) "
-        message = f"[{self.opt.name}] (GPU: {self.opt.gpu_ids_str}, iters: {current_iters}, time: {t:.3f}) "
+        message = f"[{self.opt.name}] (GPU: {0}, iters: {current_iters}, time: {t:.3f}) "
         for k, v in errors.items():
             message += '%s: %.6f ' % (k, v)
 
@@ -93,7 +93,7 @@ class Visualizer():
     def print_current_metrics(self, current_iters, metrics, phase):
         # message = f'([{phase}] GPU: {}, steps: %d) ' % (phase, self.opt.gpu_ids_str, current_iters)
         # message = f'([{self.opt.exp_time}] [{phase}] GPU: {self.opt.gpu_ids_str}, steps: {current_iters}) '
-        message = f'([{self.opt.name}] [{phase}] GPU: {self.opt.gpu_ids_str}, steps: {current_iters}) '
+        message = f'([{self.opt.name}] [{phase}] GPU: {0}, steps: {current_iters}) '
         for k, v in metrics.items():
             message += '%s: %.3f ' % (k, v)
 

@@ -10,13 +10,14 @@ class TopKBuffer:
         self.hp = []          # max-heap on −angle
 
     def push(self, angle, z0):
-        item = (-float(angle), z0.detach().cpu())
-        if len(self.hp) < self.k:
-            heapq.heappush(self.hp, item)
-        else:
-            # hp[0] is *worst* (largest −angle ⇒ smallest +angle)
-            if -item[0] < -self.hp[0][0]:      # better angle
-                heapq.heapreplace(self.hp, item)
+        for angle_i in angle:
+            item = (float(angle_i), z0.detach().cpu())
+            if len(self.hp) < self.k:
+                heapq.heappush(self.hp, item)
+            else:
+                # hp[0] is *worst* (largest −angle ⇒ smallest +angle)
+                if -item[0] < -self.hp[0][0]:      # better angle
+                    heapq.heapreplace(self.hp, item)
 
     def sample(self, n):
         return random.sample(self.hp, n)

@@ -39,7 +39,7 @@ def write_legacy_vtk_tetra(out_path, points, tets, title="mesh"):
         for _ in range(ntet):
             f.write("10\n")
 
-    print(f"[OK] wrote legacy VTK 2.0: {out_path}")
+    # print(f"[OK] wrote legacy VTK 2.0: {out_path}")
 
 def main():
     ap = argparse.ArgumentParser()
