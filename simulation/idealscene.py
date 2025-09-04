@@ -13,7 +13,6 @@ def createScene(rootNode):
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.StateContainer') # Needed to use components [MechanicalObject]  
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.Topology.Container.Constant') # Needed to use components [MeshTopology]  
     rootNode.addObject('RequiredPlugin', name='Sofa.GL.Component.Rendering3D') # Needed to use components [OglModel,OglSceneFrame]  
-    rootNode.addObject('RequiredPlugin', name='Sofa.GUI.Component') # Needed to use components [AttachBodyButtonSetting] 
     
     rootNode.addObject('RequiredPlugin', pluginName='SofaPython3 SoftRobots')
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.AnimationLoop')
