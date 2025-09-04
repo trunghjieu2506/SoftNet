@@ -35,3 +35,4 @@ train_venv/
 simulation/SOFA_v25.06.00_Linux/
 saved_results/
 ckpt_dir/
+simulation/fingerMonitor*.txt

@@ -7,7 +7,6 @@ def createScene(rootNode):
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.Constraint.Lagrangian.Correction') # Needed to use components [GenericConstraintCorrection]  
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.Constraint.Lagrangian.Solver') # Needed to use components [GenericConstraintSolver]  
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.Engine.Select') # Needed to use components [BoxROI]  
-    rootNode.addObject('RequiredPlugin', name='Sofa.Component.LinearSolver.Preconditioner') # Needed to use components [JacobiPreconditioner]  
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.Setting') # Needed to use components [BackgroundSetting]  
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.SolidMechanics.Spring') # Needed to use components [RestShapeSpringsForceField]  
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.StateContainer') # Needed to use components [MechanicalObject]  
@@ -28,7 +27,9 @@ def createScene(rootNode):
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.Collision.Geometry')
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.Collision.Response.Contact')
     rootNode.addObject('RequiredPlugin', name='Sofa.Component.Visual')
-    rootNode.addObject('RequiredPlugin', name='SofaValidation')
+    rootNode.addObject('RequiredPlugin', name='SofaValidation')  
+    rootNode.addObject('RequiredPlugin', name='Sofa.GUI.Component') # Needed to use components [AttachBodyButtonSetting]  
+
 
     rootNode.addObject('AttachBodyButtonSetting', stiffness=10)
     rootNode.addObject('GenericConstraintSolver', tolerance=1e-7, maxIterations=1000)
@@ -36,10 +37,10 @@ def createScene(rootNode):
     rootNode.addObject('FreeMotionAnimationLoop')
 
     rootNode.addObject('CollisionPipeline')
-    rootNode.addObject('ParallelBruteForceBroadPhase')
-    rootNode.addObject('ParallelBVHNarrowPhase')
-    # rootNode.addObject('BruteForceBroadPhase')
-    # rootNode.addObject('BVHNarrowPhase')
+    # rootNode.addObject('ParallelBruteForceBroadPhase')
+    # rootNode.addObject('ParallelBVHNarrowPhase')
+    rootNode.addObject('BruteForceBroadPhase')
+    rootNode.addObject('BVHNarrowPhase')
     rootNode.addObject('LocalMinDistance', name='Proximity', alarmDistance=1.0, contactDistance=0.5)
     rootNode.addObject('CollisionResponse', response='FrictionContactConstraint', responseParams='mu=0.6')
 
@@ -64,19 +65,19 @@ def createScene(rootNode):
                      filename='/workspace/SSLSoftneet/simulation/out_dir/finger_legacy_ascii.vtk')
 
     finger.addObject('TetrahedronSetTopologyContainer', name='topo', src='@volLoader')
-    finger.addObject('MechanicalObject', name='dofs', template='Vec3f')
+    finger.addObject('MechanicalObject', name='dofs', template='Vec3d')
 
     # Physics
     finger.addObject('UniformMass', totalMass=0.4)
     finger.addObject('GenericConstraintCorrection')
     # Use the parallel component when available (as your log suggested)
-    finger.addObject('ParallelTetrahedronFEMForceField', template='Vec3f',
-                    method='large', youngModulus=5e5, poissonRatio=0.45)
-    # finger.addObject('TetrahedronFEMForceField', template='Vec3f',
+    # finger.addObject('ParallelTetrahedronFEMForceField', template='Vec3d',
     #                 method='large', youngModulus=5e5, poissonRatio=0.45)
+    finger.addObject('TetrahedronFEMForceField', template='Vec3f',
+                    method='large', youngModulus=5e5, poissonRatio=0.45)
     
     finger.addObject('Monitor', name="fingerMonitorA", 
-                template="Vec3f",
+                template="Vec3d",
                 listening=True, 
                 indices="1",  #  Track vertex index 1 (Change this to the point you want to track)
                 showPositions=True, PositionsColor="1 1 0 1",
@@ -126,7 +127,7 @@ def createScene(rootNode):
     cav1.addObject('MeshTopology', src='@loader', name='topo')
     cav1.addObject('MechanicalObject', name='mo')
 
-    cav1.addObject('SurfacePressureConstraint', name='spc', template='Vec3',
+    cav1.addObject('SurfacePressureConstraint', name='spc', template='Vec3d',
                    value=0.02,  # start from 0 Pa, controller will change
                    triangles='@topo.triangles',
                    valueType='pressure')

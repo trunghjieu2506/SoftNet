@@ -68,7 +68,7 @@ def main():
         cal_band,
         voxel_size=vox,
         origin=org,
-        out_dir=args.out_dir,
+        out_dir="simulation/out_dir",
         invert_sign=False,
         max_cell_circumradius=max_cell_circumradius,
         max_facet_distance=max_facet_distance
