@@ -76,7 +76,7 @@ class SDFusionOpt(BaseOpt):
         # opt.dataset_mode = 'buildingnet'
         # opt.cat = 'all'
         print(f'[*] {self.name()} initialized.')
-        self.device = 'cpu' 
+        self.device = 'cuda' 
         
     def init_dset_args(self, dataroot='data', dataset_mode='snet', cat='all', res=64, cached_dir=None):
         # dataset - snet
