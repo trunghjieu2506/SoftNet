@@ -76,35 +76,35 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
             #     visualizer.display_current_results(
             #         model.get_current_visuals(), iter_i, phase='test')
 
-            if iter_ip1 == 0:
+            if iter_ip1 % 25 == 0:
                 cprint('saving the latest model (current_iter %d)' % (iter_i), 'blue')
                 latest_name = f'steps-latest'
                 model.save(latest_name, iter_ip1)
 
             # save every 3000 steps (batches)
-            if iter_ip1 & 3000 == 0:
+            if iter_ip1 % 3000 == 0:
                 cprint('saving the model at iters %d' % iter_ip1, 'blue')
                 latest_name = f'steps-latest'
                 model.save(latest_name, iter_ip1)
                 cur_name = f'steps-{iter_ip1}'
                 model.save(cur_name, iter_ip1)
 
-            # eval every 3000 steps
-            if iter_ip1:
-                metrics = model.eval_metrics(test_dl_for_eval, global_step=iter_ip1)
-                visualizer.print_current_metrics(iter_ip1, metrics, phase='test')
-                # print(metrics)
+            # # eval every 3000 steps
+            # if iter_ip1:
+            #     metrics = model.eval_metrics(test_dl_for_eval, global_step=iter_ip1)
+            #     visualizer.print_current_metrics(iter_ip1, metrics, phase='test')
+            #     # print(metrics)
                 
-                cprint(f'[*] End of steps %d \t Time Taken: %d sec \n%s' %
-                    (
-                        iter_ip1,
-                        time.time() - iter_start_time,
-                        os.path.abspath( os.path.join(opt.logs_dir, opt.name) )
-                    ), 'blue', attrs=['bold']
-                    )
+            #     cprint(f'[*] End of steps %d \t Time Taken: %d sec \n%s' %
+            #         (
+            #             iter_ip1,
+            #             time.time() - iter_start_time,
+            #             os.path.abspath( os.path.join(opt.logs_dir, opt.name) )
+            #         ), 'blue', attrs=['bold']
+            #         )
 
         # adjust every 10000 steps
-        if iter_i:
+        if iter_i % 3000 == 0:
             model.update_learning_rate()
 
         pbar.update(1)
