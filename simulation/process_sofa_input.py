@@ -646,10 +646,12 @@ def reextract_surfaces_from_tet_fast(
         # Fallback: export everything as one outer if classification failed
         fallback = trimesh.Trimesh(pts, boundary, process=True)
         fallback.export(os.path.join(out_dir, "outer_from_tet.stl"))
-
+    
     # Export cavities
     for i, cm in enumerate(cavity_meshes, start=1):
         cm.export(os.path.join(out_dir, f"cavity_from_tet_{i}.stl"))
+        print(f"Exported")
+
 
 def _downsample_sdf(sdf: np.ndarray, factor: int = 1) -> np.ndarray:
     """Downsample by an integer factor using trilinear filtering."""
@@ -689,9 +691,9 @@ def export_sdf_volume_to_sofa(
         voxel_size = tuple(v * voxel_ds_factor for v in voxel_size)
 
     # # 1) surfaces from SDF
-    # outer_V, outer_F= extract_surfaces_from_sdf(
-    #     sdf, cal_band, voxel_size, origin, invert_sign=invert_sign, clean_outer=clean_outer
-    # )
+    # # outer_V, outer_F= extract_surfaces_from_sdf(
+    # #     sdf, cal_band, voxel_size, origin, invert_sign=invert_sign, clean_outer=clean_outer
+    # # )
 
     # trimesh.Trimesh(outer_V, outer_F, process=False).export(os.path.join(out_dir, "outer.stl"))
     # trimesh.Trimesh(inner_V, inner_F, process=False).export(os.path.join(out_dir, "cavity.stl"))
@@ -705,9 +707,9 @@ def export_sdf_volume_to_sofa(
     # 3) re-extract (vectorized)
     reextract_surfaces_from_tet_fast(vtu_path, sdf, voxel_size, origin, out_dir)
 
-    print(f"[OK] Exported to: {os.path.abspath(out_dir)}")
-    print("  - finger.vtu")
-    print("  - outer.stl, cavity_*.stl")
-    print("  - outer_from_tet.stl, cavity_from_tet_*.stl  (use these in SOFA for best coupling)")
+    # print(f"[OK] Exported to: {os.path.abspath(out_dir)}")
+    # print("  - finger.vtu")
+    # print("  - outer.stl, cavity_*.stl")
+    # print("  - outer_from_tet.stl, cavity_from_tet_*.stl  (use these in SOFA for best coupling)")
     
 

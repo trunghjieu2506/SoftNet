@@ -3,7 +3,7 @@
 
 import struct, argparse, numpy as np
 from pathlib import Path
-from simulation.process_sofa_input import export_sdf_volume_to_sofa  # <-- from the exporter we wrote earlier
+from process_sofa_input import export_sdf_volume_to_sofa  # <-- from the exporter we wrote earlier
 
 def read_sdf_bin(path: str):
     with open(path, "rb") as f:
@@ -68,8 +68,8 @@ def main():
         cal_band,
         voxel_size=vox,
         origin=org,
-        out_dir=args.out_dir,
-        invert_sign=args.invert_sign,
+        out_dir="simulation/out_dir",
+        invert_sign=False,
         max_cell_circumradius=max_cell_circumradius,
         max_facet_distance=max_facet_distance
     )

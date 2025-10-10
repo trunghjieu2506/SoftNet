@@ -159,16 +159,33 @@ class CheckpointFunction(torch.autograd.Function):
             # Tensors.
             shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
             output_tensors = ctx.run_function(*shallow_copies)
-        input_grads = torch.autograd.grad(
-            output_tensors,
-            ctx.input_tensors + ctx.input_params,
-            output_grads,
+        # ---- filter only the params ----
+        params = list(ctx.input_params)
+        mask = [torch.is_tensor(p) and p.requires_grad for p in params]
+        active_params = [p for p, m in zip(params, mask) if m]
+    
+        # Ask autograd for grads of: all (re-made) input_tensors + only the active params
+        grads_active = torch.autograd.grad(
+            outputs=output_tensors,
+            inputs=list(ctx.input_tensors) + active_params,
+            grad_outputs=output_grads,
             allow_unused=True,
+            retain_graph=False,
+            create_graph=False,
         )
-        del ctx.input_tensors
-        del ctx.input_params
-        del output_tensors
-        return (None, None) + input_grads
+    
+        # Split: first part corresponds to input_tensors (we forced requires_grad_=True)
+        n_t = len(ctx.input_tensors)
+        grads_tensors = list(grads_active[:n_t])
+        grads_active_params = list(grads_active[n_t:])
+    
+        # ---- pad back to original param order (None for frozen) ----
+        it = iter(grads_active_params)
+        grads_params = [next(it) if m else None for m in mask]
+    
+        # cleanup + return: must match forward’s input arity/order
+        del ctx.input_tensors, ctx.input_params, output_tensors
+        return (None, None) + tuple(grads_tensors + grads_params)
 
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):

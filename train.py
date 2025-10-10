@@ -49,12 +49,12 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
             visualizer.reset()
         
         # ignore the dataset, run SOFA-based optimize_parameters()
-        model.optimize_parameters(iter_i, top_k=1)
+        model.optimize_parameters(top_k=1, batch_size=1)
 
         # nBatches_has_trained += opt.batch_size
 
         if get_rank() == 0:
-            if iter_i:
+            if iter_i % 1 == 0:
                 errors = model.get_current_errors()
 
                 t = (time.time() - iter_start_time) / opt.batch_size
@@ -80,14 +80,19 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
                 cprint('saving the latest model (current_iter %d)' % (iter_i), 'blue')
                 latest_name = f'steps-latest'
                 model.save(latest_name, iter_ip1)
+            # if iter_ip1 & 3000 == 0:
+            #     cprint('saving the latest model (current_iter %d)' % (iter_i), 'blue')
+            #     latest_name = f'steps-latest'
+            #     model.save(latest_name, iter_ip1)
 
             # save every 3000 steps (batches)
+            if iter_ip1 % 3000 == 0:
             if iter_ip1 % 3000 == 0:
                 cprint('saving the model at iters %d' % iter_ip1, 'blue')
                 latest_name = f'steps-latest'
                 model.save(latest_name, iter_ip1)
-                cur_name = f'steps-{iter_ip1}'
-                model.save(cur_name, iter_ip1)
+                # cur_name = f'steps-{iter_ip1}'
+                # model.save(cur_name, iter_ip1)
 
             # # eval every 3000 steps
             # if iter_ip1:
