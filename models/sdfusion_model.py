@@ -4,6 +4,8 @@
 import os
 from collections import OrderedDict
 from functools import partial
+from typing import List
+
 
 import numpy as np
 import mcubes
@@ -46,6 +48,7 @@ from utils.distributed import reduce_loss_dict
 # rendering
 from utils.util_3d import init_mesh_renderer, render_sdf
 from simulation.run_simulation import run_simulation
+from simulation.sofa_live_runner import SofaLiveRunner, run_simulation_keepalive
 
 class SDFusionModel(BaseModel):
     def name(self):
@@ -53,9 +56,14 @@ class SDFusionModel(BaseModel):
 
     def initialize(self, opt):
         BaseModel.initialize(self, opt)
+        self.opt = opt
         self.isTrain = opt.isTrain
         self.model_name = self.name()
         self.device = opt.device
+
+        self.loss_dict, self.loss_total, self.loss_simple, self.loss_vlb, self.loss_gamma = None, None, None, None, None
+
+        self.simulation_runner = SofaLiveRunner()
         
         # setup renderer
         if 'snet' in opt.dataset_mode:
@@ -90,23 +98,30 @@ class SDFusionModel(BaseModel):
         self.vqvae = load_vqvae(vq_conf, vq_ckpt=opt.vq_ckpt, opt=opt)
         # if opt.online_sofa:
         self.df.requires_grad_(False)  # freeze UNet except prompt
+        self.vqvae.requires_grad_(False)
         self.prompt_modules = []                     # ❶ keep a handle
         for module in self.df.modules():
             if isinstance(module, SoftPrompt3D):
                 self.prompt_modules.append(module)   # remember it
-                module.requires_grad_(True)  # unfreeze prompt
-             
+                module.requires_grad_(True)  # unfreeze prompt  
+
         total = sum(p.numel() for p in self.df.parameters())
         train  = sum(p.numel() for p in self.df.parameters() if p.requires_grad)
         soft_prompt_param = sum(p.numel() for m in self.prompt_modules for p in m.parameters())
         print(f'soft_prompt {soft_prompt_param} / trainable {train} M  /  total {total/1e6:.1f} M')
+        allowed = {id(p) for m in self.prompt_modules for p in m.parameters()}
+        leaks = []
+        for n, p in self.df.named_parameters():
+            if p.grad is not None and id(p) not in allowed:
+                leaks.append(n)
         
-        # freeze VQVAE & modality encoders completely
-        for p in self.vqvae.parameters():
-            p.requires_grad_(False)
+        assert not leaks, f"Forbidden grads: {leaks}"
+        print("✅ No forbidden grads; only SoftPrompt3D params received gradients.")
+
+        
         
         # replay buffer & optimiser ................................
-        self.replay   = TopKBuffer(k=opt.top_k)
+        self.replay   = TopKBuffer(buffer_size=opt.buffer_size, k=opt.top_k)
         prm           = [p for m in self.prompt_modules for p in m.parameters()]
         for i in prm:
             assert i.requires_grad
@@ -114,6 +129,7 @@ class SDFusionModel(BaseModel):
         self.scheduler= optim.lr_scheduler.StepLR(self.optimizer, 1000, 0.9)
         self.optimizers = [self.optimizer]
         self.schedulers = [self.scheduler]
+
         # # online loss
         # self.online_loss = OnlineLoss(ddim_sampler,
         #                 self.vqvae_module)
@@ -186,7 +202,7 @@ class SDFusionModel(BaseModel):
         # ref: ddpm.py, register_schedule
         self.register_schedule()
         logvar_init = 0.
-        self.logvar = torch.full(fill_value=logvar_init, size=(self.num_timesteps,))
+        self.logvar = torch.full(fill_value=logvar_init, size=(self.num_timesteps,)).to(self.device)
         self.scale = scale # default for uncond
 
     def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
@@ -507,83 +523,92 @@ class SDFusionModel(BaseModel):
 
         self.loss.backward()
 
-    def optimize_parameters(self, total_steps, top_k=10, batch_size=1):
+    def optimize_parameters(self):
+        ddim_sampler = DDIMSampler(self)
+        with torch.no_grad():
+            latent, _ = ddim_sampler.sample(
+                            S      = 25,
+                            batch_size = self.opt.batch_size,
+                            shape      = self.z_shape,
+                            conditioning= None,
+                            eta        = 0.0)
+            sdf = self.vqvae_module.decode_no_quant(latent).squeeze().cpu().numpy()
+            latent = latent.to(self.device)
+            if self.opt.batch_size == 1:
+                sdf = [sdf]
+                latent = [latent.squeeze(0)]  # Remove batch dimension but keep as tensor
+            else:
+                latent = [latent[i] for i in range(latent.shape[0])]
 
-        # self.set_requires_grad([self.df], requires_grad=True)
-        if not True: # self.opt.online_sofa:
-            
-            self.forward()
-            self.optimizer.zero_grad()
-            self.backward()
-            self.optimizer.step()
+
+        # -- 2. run SOFA, obtain bending angle ------------
+        # from utils.sofa_wrapper import run_sofa_once
+
+        ## TODO: parallelize this ~ each mature sdf takes 12s to mesh + simulate
+        angle = [run_simulation_keepalive(runner = self.simulation_runner, sdf = sdf_i, n_steps = 200) for sdf_i in sdf]  
         
-        else: 
-            # -- 1. sample a latent shape ---------------------
-            ddim_sampler = DDIMSampler(self)
-            with torch.no_grad():
-                latent, _ = ddim_sampler.sample(
-                                S      = 1,
-                                batch_size = batch_size,
-                                shape      = self.z_shape,
-                                conditioning= None,
-                                eta        = 0.0)
-                sdf = self.vqvae_module.decode_no_quant(latent).squeeze().cpu().numpy()
-                if batch_size == 1:
-                    sdf = [sdf]
-                
+        # -- 3. push into replay buffer -------------------
+        self.replay.push(zip(list(angle), list(latent)))   # store clean z₀
+        
+        #size of the buffer dataset
+        buffer = self.opt.buffer_size + self.opt.top_k
+        # -- 4. optimise prompt on a minibatch from buffer
+        if len(self.replay) >= buffer:
+            batch = self.replay.sample(self.opt.batch_size) #list of tuples (angle, counter, z0)
+            z0 = torch.stack([item[2] for item in batch], dim =0).to(self.device)  # stack z0
+            c = None
 
-            # -- 2. run SOFA, obtain bending angle ------------
-            # from utils.sofa_wrapper import run_sofa_once
-            angle = [run_simulation(sdf_i) for sdf_i in sdf]  # dummy angle, for now
+            t  = torch.randint(0, self.num_timesteps, (z0.shape[0],), device=self.device)
+            z_noisy, target, loss, loss_dict = self.p_losses(z0, c, t)
+            self.loss_dict = loss_dict
+            self.loss = loss 
+
+            self.loss_dict = reduce_loss_dict(self.loss_dict)
+            self.loss_total = self.loss_dict['loss_total']
+            self.loss_simple = self.loss_dict['loss_simple']
+            self.loss_vlb = self.loss_dict['loss_vlb']
+            if 'loss_gamma' in self.loss_dict:
+                self.loss_gamma = self.loss_dict['loss_gamma']
             
-            # -- 3. push into replay buffer -------------------
-            self.replay.push(angle, latent)   # store clean z₀
-            
-            buffer_batch = top_k
-            # -- 4. optimise prompt on a minibatch from buffer
-            if len(self.replay) >= buffer_batch:
-                batch = self.replay.sample(buffer_batch)
-                loss  = 0.0
 
-                for _, z0 in batch:
-                    z0 = z0.to(self.device)
-                    t  = torch.randint(0, self.num_timesteps, (1,), device=self.device)
-                    eps= torch.randn_like(z0)
-                    zt = self.q_sample(z0, t, noise=eps)
-                    eps_pred = self.apply_model(zt, t, cond=None)  # frozen UNet + prompt
-                    loss     += F.mse_loss(eps_pred, eps)
+            # for _, _, z0 in batch:
+            #     z0 = z0.to(self.device)
+            #     eps= torch.randn_like(z0)
+            #     zt = self.q_sample(z0, t, noise=eps).unsqueeze(0)
+            #     eps_pred = self.apply_model(zt, t, cond=None)  # frozen UNet + prompt
+            #     loss     += F.mse_loss(eps_pred, eps)
 
-                loss /= buffer_batch
+            # loss /= buffer_batch
 
-                loss_dict = {}
-                loss_simple = loss
-                loss_dict.update({f'loss_simple': loss_simple.mean()})
+            # loss_dict = {}
+            # loss_simple = loss
+            # loss_dict.update({f'loss_simple': loss_simple.mean()})
 
-                logvar_t = self.logvar[t].to(self.device)
-                loss_v = loss_simple / torch.exp(logvar_t) + logvar_t
-                if self.learn_logvar:
-                    loss_dict.update({f'loss_gamma': loss_v.mean()})
-                    loss_dict.update({'logvar': self.logvar.data.mean()})
+            # logvar_t = self.logvar[t].to(self.device)
+            # loss_v = loss_simple / torch.exp(logvar_t) + logvar_t
+            # if self.learn_logvar:
+            #     loss_dict.update({f'loss_gamma': loss_v.mean()})
+            #     loss_dict.update({'logvar': self.logvar.data.mean()})
 
-                loss_v = self.l_simple_weight * loss_v.mean()
+            # loss_v = self.l_simple_weight * loss_v.mean()
 
-                loss_vlb = loss
-                loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
-                loss_dict.update({f'loss_vlb': loss_vlb})
-                loss_v += (self.original_elbo_weight * loss_vlb)
-                loss_dict.update({f'loss_total': loss_v.clone().detach().mean()})
-                self.loss_dict = loss_dict
-                self.loss_dict = reduce_loss_dict(self.loss_dict)
-                self.loss_total = self.loss_dict['loss_total']
-                self.loss_simple = self.loss_dict['loss_simple']
-                self.loss_vlb = self.loss_dict['loss_vlb']
+            # loss_vlb = loss
+            # loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
+            # loss_dict.update({f'loss_vlb': loss_vlb})
+            # loss_v += (self.original_elbo_weight * loss_vlb)
+            # loss_dict.update({f'loss_total': loss_v.clone().detach().mean()})
+            # self.loss_dict = loss_dict
+            # self.loss_dict = reduce_loss_dict(self.loss_dict)
+            # self.loss_total = self.loss_dict['loss_total']
+            # self.loss_simple = self.loss_dict['loss_simple']
+            # self.loss_vlb = self.loss_dict['loss_vlb']
 
-                self.optimizer.zero_grad()
-                loss.backward()          # grads flow ONLY into soft-prompt tensors
-                self.optimizer.step()
+            self.optimizer.zero_grad()
+            self.loss.backward()          # grads flow ONLY into soft-prompt tensors
+            self.optimizer.step()
 
-            # bookkeeping for logger
-            # self.loss_total = torch.tensor(angle)   # display current physical score
+        # bookkeeping for logger
+        # self.loss_total = torch.tensor(angle)   # display current physical score
 
     def get_current_errors(self):
         
