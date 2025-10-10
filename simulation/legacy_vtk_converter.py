@@ -62,3 +62,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def convert_vtu_to_legacy_vtk(input_vtu, output_vtk, title="mesh"):
+    m = meshio.read(input_vtu)
+
+    # Find tetra connectivity
+    if "tetra" not in m.cells_dict or len(m.cells_dict["tetra"]) == 0:
+        print("[ERROR] input has no tetra cells; found:", list(m.cells_dict.keys()))
+        return
+
+    pts  = m.points
+    tets = m.cells_dict["tetra"]
+
+    write_legacy_vtk_tetra(output_vtk, pts, tets, title=title)

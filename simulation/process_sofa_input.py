@@ -33,6 +33,8 @@ import trimesh
 import meshio
 from pathlib import Path
 from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import map_coordinates
+
 
 # pygalmesh uses CGAL; make sure wheels are available for your Python
 import pygalmesh
@@ -43,14 +45,14 @@ def _to_numpy_3d(vol) -> np.ndarray:
     """Accept torch.Tensor [B,1,D,H,W] or numpy [D,H,W]; return float32 [D,H,W]."""
     if torch is not None and isinstance(vol, torch.Tensor):
         if vol.ndim == 5:
-            vol = vol[0, 0]  # take the first item/channel
+            vol = vol[0, 0]  # shape becomes [D,H,W]
         vol = vol.detach().cpu().numpy()
+
     vol = np.asarray(vol)
     if vol.ndim == 5:
         vol = vol[0, 0]
     assert vol.ndim == 3, f"Expected 3D array, got shape {vol.shape}"
     return vol.astype(np.float32, copy=False)
-
 
 def _flood_fill_exterior_air(air: np.ndarray) -> np.ndarray:
     """air: bool 3D; return bool mask of air voxels connected to the grid boundary (exterior)."""
@@ -410,41 +412,90 @@ def tet_mesh_from_sdf(
     max_cell_circumradius: float = 0.012,
     max_facet_distance: float = 0.004
 ):
+    import numpy as np
+    import pygalmesh
+
     D, H, W = sdf.shape
     xs = origin[0] + np.arange(D) * voxel_size[0]
     ys = origin[1] + np.arange(H) * voxel_size[1]
     zs = origin[2] + np.arange(W) * voxel_size[2]
 
+    # pygalmesh expects continuous implicit function while our input sdf is discrete grid. Thus, using Interpolator.
     interp = RegularGridInterpolator((xs, ys, zs), sdf, bounds_error=False, fill_value=1.0)
 
-    # ---- pygalmesh domain wrapper (new API uses DomainBase) ----
-    if hasattr(pygalmesh, "ImplicitDomain"):
-        # very old pygalmesh
-        class Domain(pygalmesh.ImplicitDomain):
-            def __init__(self):
-                super().__init__()
-                self.bmin = np.array([xs.min(), ys.min(), zs.min()], dtype=np.float64)
-                self.bmax = np.array([xs.max(), ys.max(), zs.max()], dtype=np.float64)
-            def eval(self, x):
-                return float(interp(np.asarray(x).reshape(1, 3))[0])
-    else:
-        # current pygalmesh API
-        class Domain(pygalmesh.DomainBase):
-            def __init__(self):
-                super().__init__()
-                self.bmin = np.array([xs.min(), ys.min(), zs.min()], dtype=np.float64)
-                self.bmax = np.array([xs.max(), ys.max(), zs.max()], dtype=np.float64)
-                self._center = 0.5 * (self.bmin + self.bmax)
-                # radius^2 big enough for the whole box
-                self._rad2 = float(np.max((self.bmax - self._center) ** 2))
-            def eval(self, x):
-                # CGAL expects negative inside
-                return float(interp(np.asarray(x).reshape(1, 3))[0])
-            # Some versions only need squared radius; others also call center():
-            def get_bounding_sphere_center(self):
-                return self._center
-            def get_bounding_sphere_squared_radius(self):
-                return self._rad2
+    # class Domain(pygalmesh.DomainBase):
+    #     def __init__(self):
+    #         super().__init__()
+    #         self.bmin = np.array([xs.min(), ys.min(), zs.min()], dtype=np.float64)
+    #         self.bmax = np.array([xs.max(), ys.max(), zs.max()], dtype=np.float64)
+    #         half = self.bmax - self._center        # (hx, hy, hz)
+    #         self._rad2 = float(np.dot(half, half)) # hx^2 + hy^2 + hz^2
+    #     def eval(self, x):
+    #         return float(interp(np.asarray(x).reshape(1, 3))[0])
+    #     # Some versions only need squared radius; others also call center():
+    #     def get_bounding_sphere_center(self):
+    #         return self._center
+    #     def get_bounding_sphere_squared_radius(self):
+    #         return self._rad2
+    # # pip install pygalmesh meshio numpy scipy
+
+
+    class Domain(pygalmesh.DomainBase):
+        """
+        SDF grid domain with fast trilinear eval using scipy.ndimage.map_coordinates.
+        sdf: np.ndarray [D,H,W], negative=inside
+        voxel_size: (sx, sy, sz) in world units
+        origin: (ox, oy, oz) world coords of sdf[0,0,0]
+        """
+        def __init__(self, sdf: np.ndarray, voxel_size, origin):
+            super().__init__()
+            assert sdf.ndim == 3
+            self.sdf = np.asarray(sdf, dtype=np.float32)
+            self.sx, self.sy, self.sz = map(float, voxel_size)
+            self.ox, self.oy, self.oz = map(float, origin)
+
+            # world AABB in case you want a quick “outside → +1” check (optional)
+            D, H, W = self.sdf.shape
+            self.bmin = np.array([self.ox, self.oy, self.oz], dtype=float)
+            self.bmax = self.bmin + np.array([(D-1)*self.sx, (H-1)*self.sy, (W-1)*self.sz])
+
+            # bounding sphere (center + radius^2) that encloses the whole box
+            self._center = 0.5*(self.bmin + self.bmax)
+            half = self.bmax - self._center
+            self._rad2 = float(np.dot(half, half))   # encloses the whole box
+
+        def _world_to_index(self, x):
+                # map world → fractional index in [0..D-1], [0..H-1], [0..W-1]
+                # IMPORTANT: we assume sdf[i,j,k] corresponds to world (x,y,z) with:
+                # x = ox + i*sx, y = oy + j*sy, z = oz + k*sz
+                i = (x[0] - self.ox)/self.sx
+                j = (x[1] - self.oy)/self.sy
+                k = (x[2] - self.oz)/self.sz
+                return i, j, k
+
+        def eval(self, x):
+            x = np.asarray(x, dtype=float)
+            # OPTIONAL quick outside test (free speed): if well outside AABB, return +1.0
+            if (x < self.bmin).any() or (x > self.bmax).any():
+                return 1.0
+
+            i, j, k = self._world_to_index(x)
+            # Use constant mode with cval=+1 to match your old fill_value behavior.
+            val = map_coordinates(
+                self.sdf,
+                coordinates=np.array([[i], [j], [k]]),
+                order=1,        # trilinear
+                mode="constant",
+                cval=1.0,
+                prefilter=False # faster; fine for order=1
+            )[0]
+            return float(val)
+
+        def get_bounding_sphere_center(self):
+            return self._center
+
+        def get_bounding_sphere_squared_radius(self):
+            return self._rad2 
 
     dom = Domain()
 
@@ -456,7 +507,7 @@ def tet_mesh_from_sdf(
         # volume sizing / quality
         max_cell_circumradius=max_cell_circumradius,
         max_circumradius_edge_ratio=2.0,
-        # optional toggles (safe defaults)
+        ## mesh-gen optimisation options, set True if needed, but slower 
         lloyd=False, odt=False, perturb=False, exude=False,
         verbose=False,
     )
@@ -487,35 +538,34 @@ def reextract_surfaces_from_tet_fast(
     if "tetra" in m.cells_dict:
         tets = m.cells_dict["tetra"]
     else:
-        # gmsh sometimes uses "tetra10" etc.; reduce to linear tets if needed
-        for k, arr in m.cells_dict.items():
-            if k.startswith("tetra"):
-                tets = arr[:, :4]
-                break
-        else:
-            raise RuntimeError("No tetra cells in VTU.")
+        raise RuntimeError("No tetra cells in VTU.")
 
     # ---- 1) collect all faces (each tet contributes 4 faces) ----
-    a, b, c, d = tets[:,0], tets[:,1], tets[:,2], tets[:,3]
+    a, b, c, d = tets[:,0], tets[:,1], tets[:,2], tets[:,3] # a,b,c, d are (N,) int
+
+    # collection of all faces 
     faces = np.vstack([
-        np.stack([a, b, c], axis=1),
+        np.stack([a, b, c], axis=1), # three vertices form one face (2D plane)
         np.stack([a, b, d], axis=1),
         np.stack([a, c, d], axis=1),
         np.stack([b, c, d], axis=1),
     ])  # (4*N, 3)
 
-    # sort vertex indices within each face for consistent identification
+    # sort vertex indices within each face. Two tets sharing a face will have the same sorted indices
     faces_sorted = np.sort(faces, axis=1)
-    faces_sorted = np.ascontiguousarray(faces_sorted)  # <-- CRITICAL
+    faces_sorted = np.ascontiguousarray(faces_sorted)  # make sure faces_sorted is stored contiguously in memory for np.unique below
 
-    # ---- 2) boundary faces = those appearing exactly once ----
-    uniq, counts = np.unique(faces_sorted, axis=0, return_counts=True)
-    boundary = uniq[counts == 1]  # (M, 3) int
+    # ---- 2) boundary/surface faces = those appearing exactly once ----
+    uniq, counts = np.unique(faces_sorted, axis=0, return_counts=True) #uniq is a set of faces, counts is how many times each face from uniq appears
+    boundary = uniq[counts == 1] 
 
     # ---- 3) split boundary into connected components ----
     # Make a raw mesh for connectivity; disable processing to keep indices intact
     boundary_mesh = trimesh.Trimesh(pts, boundary, process=False)
-    components = boundary_mesh.split(only_watertight=False)
+    components = boundary_mesh.split(only_watertight=True) #only return watertight components as pneumatic parts requires watertight meshes
+
+    if (len(components) == 0):
+        raise RuntimeError("No watertight components found in boundary mesh.")
 
     # ---- 4) classify each component via SDF sign at face centroids ----
     outer_faces_all = []
@@ -523,29 +573,69 @@ def reextract_surfaces_from_tet_fast(
     vox = np.asarray(voxel_size, dtype=np.float64)
     ori = np.asarray(origin, dtype=np.float64)
 
+    # for comp in components:
+    #     if comp.faces.shape[0] == 0:
+    #         continue
+    #     # face centroids in world coords
+    #     centroids = comp.triangles_center  # (F, 3)
+
+    #     # map to voxel indices
+    #     ijk = np.floor((centroids - ori) / vox).astype(int)
+    #     ijk[:, 0] = np.clip(ijk[:,0], 0, sdf.shape[0]-1)
+    #     ijk[:, 1] = np.clip(ijk[:,1], 0, sdf.shape[1]-1)
+    #     ijk[:, 2] = np.clip(ijk[:,2], 0, sdf.shape[2]-1)
+
+    #     # heuristic: if most centroids are on AIR side (sdf>0), it's a cavity wall
+    #     air_ratio = np.mean(sdf[ijk[:,0], ijk[:,1], ijk[:,2]] > 0.0)
+
+    #     if air_ratio > 0.5:
+    #         # cavity: export each as its own STL (normals inward for SOFA pressure)
+    #         cm = trimesh.Trimesh(comp.vertices, comp.faces, process=True)
+    #         cm.invert()
+    #         cavity_meshes.append(cm)
+    #     else:
+    #         # outer shell: collect faces (we’ll merge and export once)
+    #         outer_faces_all.append(comp.faces)
+
+        # ---- 3) GEOMETRIC CLASSIFICATION ----
+    comp_metrics = []
     for comp in components:
         if comp.faces.shape[0] == 0:
+            comp_metrics.append(0.0)
             continue
-        # face centroids in world coords
-        centroids = comp.triangles_center  # (F, 3)
-
-        # map to voxel indices
-        ijk = np.floor((centroids - ori) / vox).astype(int)
-        ijk[:, 0] = np.clip(ijk[:,0], 0, sdf.shape[0]-1)
-        ijk[:, 1] = np.clip(ijk[:,1], 0, sdf.shape[1]-1)
-        ijk[:, 2] = np.clip(ijk[:,2], 0, sdf.shape[2]-1)
-
-        # heuristic: if most centroids are on AIR side (sdf>0), it's a cavity wall
-        air_ratio = np.mean(sdf[ijk[:,0], ijk[:,1], ijk[:,2]] > 0.0)
-
-        if air_ratio > 0.5:
-            # cavity: export each as its own STL (normals inward for SOFA pressure)
-            cm = trimesh.Trimesh(comp.vertices, comp.faces, process=True)
-            cm.invert()
-            cavity_meshes.append(cm)
+        
+        # METHOD 1: Bounding box volume (always works)
+        bbox_extents = comp.bounds[1] - comp.bounds[0]  # (3,)
+        bbox_vol = np.prod(bbox_extents)
+        
+        # METHOD 2: Mesh volume (more accurate, requires watertight)
+        # Use mesh volume if available, fallback to bbox
+        if comp.is_volume:
+            metric = abs(comp.volume)  # abs() handles orientation
         else:
-            # outer shell: collect faces (we’ll merge and export once)
-            outer_faces_all.append(comp.faces)
+            metric = bbox_vol
+        
+        comp_metrics.append(metric)
+
+    # Largest component is outer shell
+    outer_idx = np.argmax(comp_metrics)
+
+    cavity_meshes = []
+    for i, comp in enumerate(components):
+        if comp.faces.shape[0] == 0:
+            continue
+
+        if i == outer_idx:
+            # Outer: normals outward (default)
+            comp.export(os.path.join(out_dir, "outer_from_tet.stl"))
+        else:
+            comp.invert()
+            cavity_meshes.append(comp)
+
+    for i, cm in enumerate(cavity_meshes, start=1):
+        cm.export(os.path.join(out_dir, f"cavity_from_tet_{i}.stl"))
+
+    print(f"Found {len(cavity_meshes)} cavities")
 
     # Merge and export outer_from_tet
     if outer_faces_all:
@@ -590,19 +680,18 @@ def export_sdf_volume_to_sofa(
     """
     os.makedirs(out_dir, exist_ok=True)
 
-    sdf = _to_numpy_3d(dec_tensor)
+    sdf = _to_numpy_3d(dec_tensor) #convert input sdf to numpy array & ensure shape is [D,H,W]
 
-    # scale your voxel_size if you downsample (so geometry is preserved)
-    voxel_ds_factor = 2          # try 2 for ~8× fewer voxels -> huge size/time cut
+    # downsample the sdf to speed up meshing (optional)
+    voxel_ds_factor = 1          
     if voxel_ds_factor > 1:
         sdf = _downsample_sdf(sdf, voxel_ds_factor)
         voxel_size = tuple(v * voxel_ds_factor for v in voxel_size)
 
-    # 1) surfaces from SDF
-    # 1) surfaces (fast MC + crop)
-    outer_V, outer_F= extract_surfaces_from_sdf(
-        sdf, cal_band, voxel_size, origin, invert_sign=invert_sign, clean_outer=clean_outer
-    )
+    # # 1) surfaces from SDF
+    # outer_V, outer_F= extract_surfaces_from_sdf(
+    #     sdf, cal_band, voxel_size, origin, invert_sign=invert_sign, clean_outer=clean_outer
+    # )
 
     # trimesh.Trimesh(outer_V, outer_F, process=False).export(os.path.join(out_dir, "outer.stl"))
     # trimesh.Trimesh(inner_V, inner_F, process=False).export(os.path.join(out_dir, "cavity.stl"))
