@@ -28,27 +28,6 @@ def read_sdf_bin(path: str):
     voxel_size = (dx, dy, dz)
     return V_xyz, voxel_size, origin, cal_band
 
-def find_cal_band(path: str):
-    with open(path, "rb") as f:
-        dims = np.fromfile(f, dtype="<i4", count=3)
-        nx, ny, nz = map(int, map(abs, dims))
-        bbox = np.fromfile(f, dtype="<f8", count=6)
-        data = np.fromfile(f, dtype="<f4")
-
-    nxp, nyp, nzp = nx + 1, ny + 1, nz + 1
-    expected = nxp * nyp * nzp
-    if data.size != expected:
-        raise ValueError(f"Data size mismatch: have {data.size}, expected {expected}")
-
-    # Most tools write x-fastest; reshape to (z,y,x) for natural indexing [z,y,x]
-    grid = data.reshape((nzp, nyp, nxp))  # if axes look swapped, try (nxp, nyp, nzp).transpose(2,1,0)
-
-    xmin, ymin, zmin, xmax, ymax, zmax = bbox
-    xs = np.linspace(xmin, xmax, nxp)
-    ys = np.linspace(ymin, ymax, nyp)
-    zs = np.linspace(zmin, zmax, nzp)
-    return [xs, ys, zs]
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sdf", required=True, help="path to isosurf.sdf")

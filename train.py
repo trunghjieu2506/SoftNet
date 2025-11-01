@@ -35,7 +35,7 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
     epoch = 0
 
     # get n_epochs here
-    opt.total_iters = 100000000
+    opt.total_iters = 50
     # pbar = tqdm(range(opt.total_iters))
     pbar = tqdm(total=opt.total_iters)
 
@@ -49,7 +49,7 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
             visualizer.reset()
         
         # ignore the dataset, run SOFA-based optimize_parameters()
-        model.optimize_parameters(top_k=1, batch_size=1)
+        model.optimize_parameters(top_k = opt.top_k, batch_size=opt.batch_size)
 
         # nBatches_has_trained += opt.batch_size
 
@@ -87,7 +87,6 @@ def train_main_worker(opt, model, train_dl, test_dl, test_dl_for_eval, visualize
 
             # save every 3000 steps (batches)
             if iter_ip1 % 3000 == 0:
-            if iter_ip1 % 3000 == 0:
                 cprint('saving the model at iters %d' % iter_ip1, 'blue')
                 latest_name = f'steps-latest'
                 model.save(latest_name, iter_ip1)
@@ -120,7 +119,7 @@ if __name__ == "__main__":
     seed = 2023
     opt = SDFusionOpt(seed=seed)
     ckpt_path = 'saved_ckpt/sdfusion-snet-all.pth'
-    opt.init_model_args(ckpt_path=ckpt_path, top_k=10, lr=0.02)
+    opt.init_model_args(ckpt_path=ckpt_path, top_k=10, lr=0.001, batch_size=1)
     device = opt.device
     opt.init_dset_args(dataset_mode="snet")
 

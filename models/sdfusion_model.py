@@ -46,7 +46,7 @@ from models.networks.diffusion_networks.samplers.ddim import DDIMSampler
 from utils.distributed import reduce_loss_dict
 
 # rendering
-from utils.util_3d import init_mesh_renderer, render_sdf
+# from utils.util_3d import init_mesh_renderer, render_sdf
 from simulation.run_simulation import run_simulation
 from simulation.sofa_live_runner import SofaLiveRunner, run_simulation_keepalive
 
@@ -93,20 +93,18 @@ class SDFusionModel(BaseModel):
         # init diffusion networks
         unet_params = df_conf.unet.params
         self.df = DiffusionUNet(unet_params, vq_conf=vq_conf)
+        self.df.to(self.device)
+        self.init_diffusion_params(scale=1, opt=opt)
 
         # init vqvae
         self.vqvae = load_vqvae(vq_conf, vq_ckpt=opt.vq_ckpt, opt=opt)
         # if opt.online_sofa:
         self.df.requires_grad_(False)  # freeze UNet except prompt
-        self.vqvae.requires_grad_(False)
-        self.df.requires_grad_(False)  # freeze UNet except prompt
-        self.vqvae.requires_grad_(False)
+        self.vqvae.requires_grad_(False)  # freeze VQ-VAE
         self.prompt_modules = []                     # ❶ keep a handle
         for module in self.df.modules():
             if isinstance(module, SoftPrompt3D):
                 self.prompt_modules.append(module)   # remember it
-                module.requires_grad_(True)  # unfreeze prompt  
-
                 module.requires_grad_(True)  # unfreeze prompt  
 
         total = sum(p.numel() for p in self.df.parameters())
@@ -114,14 +112,6 @@ class SDFusionModel(BaseModel):
         soft_prompt_param = sum(p.numel() for m in self.prompt_modules for p in m.parameters())
         print(f'soft_prompt {soft_prompt_param} / trainable {train} M  /  total {total/1e6:.1f} M')
         allowed = {id(p) for m in self.prompt_modules for p in m.parameters()}
-        leaks = []
-        for n, p in self.df.named_parameters():
-            if p.grad is not None and id(p) not in allowed:
-                leaks.append(n)
-        
-        assert not leaks, f"Forbidden grads: {leaks}"
-        print("✅ No forbidden grads; only SoftPrompt3D params received gradients.")
-
         
         allowed = {id(p) for m in self.prompt_modules for p in m.parameters()}
         leaks = []
@@ -131,8 +121,6 @@ class SDFusionModel(BaseModel):
         
         assert not leaks, f"Forbidden grads: {leaks}"
         print("✅ No forbidden grads; only SoftPrompt3D params received gradients.")
-
-        
         
         # replay buffer & optimiser ................................
         self.replay   = TopKBuffer(buffer_size=opt.buffer_size, k=opt.top_k)
@@ -143,33 +131,23 @@ class SDFusionModel(BaseModel):
         self.scheduler= optim.lr_scheduler.StepLR(self.optimizer, 1000, 0.9)
         self.optimizers = [self.optimizer]
         self.schedulers = [self.scheduler]
-        self.scheduler= optim.lr_scheduler.StepLR(self.optimizer, 1000, 0.9)
-        self.optimizers = [self.optimizer]
-        self.schedulers = [self.scheduler]
-
-        # # online loss
-        # self.online_loss = OnlineLoss(ddim_sampler,
-        #                 self.vqvae_module)
-
-        self.df.to(self.device)
-        self.init_diffusion_params(scale=1, opt=opt)
 
         ######## END: Define Networks ########
 
-        if self.isTrain:
+        # if self.isTrain:
 
-            # initialize optimizers
-            prompt_params = []
-            for mod in self.prompt_modules:
-                prompt_params += list(mod.parameters())          # ≈10 k params total
+        #     # initialize optimizers
+        #     prompt_params = []
+        #     for mod in self.prompt_modules:
+        #         prompt_params += list(mod.parameters())          # ≈10 k params total
 
-            self.optimizer = optim.AdamW(prompt_params, lr=opt.lr)   # e.g., lr=2e-3
-            self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, 1000, 0.9)
+        #     self.optimizer = optim.AdamW(prompt_params, lr=opt.lr)   # e.g., lr=2e-3
+        #     self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, 1000, 0.9)
 
-            self.optimizers = [self.optimizer]
-            self.schedulers = [self.scheduler]
+        #     self.optimizers = [self.optimizer]
+        #     self.schedulers = [self.scheduler]
 
-            self.print_networks(verbose=False)
+        #     self.print_networks(verbose=False)
 
         if opt.ckpt is not None:
             self.load_ckpt(opt.ckpt, load_opt=self.isTrain)
@@ -586,7 +564,6 @@ class SDFusionModel(BaseModel):
             self.loss_vlb = self.loss_dict['loss_vlb']
             if 'loss_gamma' in self.loss_dict:
                 self.loss_gamma = self.loss_dict['loss_gamma']
-            
 
             # for _, _, z0 in batch:
             #     z0 = z0.to(self.device)

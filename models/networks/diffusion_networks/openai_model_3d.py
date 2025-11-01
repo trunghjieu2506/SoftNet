@@ -363,33 +363,149 @@ class AttentionBlock(nn.Module):
         h = self.proj_out(h)
         return (x + h).reshape(b, c, *spatial)
 
-class PromptedAttentionBlock(AttentionBlock):
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# ---- a tiny helper: stable "-inf" for masking ----
+def neg_inf_like(x):
+    return torch.finfo(x.dtype).min
+
+## Learnable scalar gate seems like a significant design choice
+class QKVPromptAttention(nn.Module):
     """
-    Same math as the original self-attention, but we append L learnable
-    key/value tokens (SoftPrompt3D) to every attention call.
+    Same math as QKVAttention, but appends L prompt tokens to K/V and
+    applies a learnable gate to their influence. With gate=0, behavior
+    equals the original attention exactly (masking avoids softmax dilution).
     """
-    def __init__(self, *a, prompt_len=8, **kw):
-        super().__init__(*a, **kw)
-        # Soft-prompt lives on the same channel dim as the feature map
-        self.soft_prompt = SoftPrompt3D(prompt_len, self.channels)
+    def __init__(self, n_heads, prompt_len, init_gate_logit=-20.0):
+        super().__init__()
+        self.n_heads = n_heads
+        self.prompt_len = prompt_len
+        # Learnable scalar gate (shared across heads & batch). Start ~0.
+        self.gate_logit = nn.Parameter(torch.tensor(float(init_gate_logit)))
+
+    def forward(self, q, k, v):
+        """
+        q,k,v: shapes (B, H*C, T_total) where T_total = T_main (+ prompt_len when present)
+               We'll split main/prompt by T_main that the caller provides.
+        """
+        bs, width, t_total = q.shape
+        ch = width // self.n_heads
+        H = self.n_heads
+
+        # Reshape for einsums: (B*H, C_head, T)
+        q = q.view(bs*H, ch, t_total)
+        k = k.view(bs*H, ch, t_total)
+        v = v.view(bs*H, ch, t_total)
+
+        # The caller will have concatenated [main | prompt] along T.
+        # We need T_main to create a mask; pass via attribute set by the caller.
+        T = self.T_main
+        Tp = t_total - T
+
+        scale = 1.0 / (ch ** 0.5)
+
+        # Compute logits
+        # logits: (B*H, T, T_total)  with q^T k
+        logits = torch.einsum("bct,bcs->bts", q*scale, k*scale)  # (BH, T, T_total)
+
+        # ---- Mask / gate for prompt columns only ----
+        if Tp > 0:
+            # gate in [0,1]
+            g = torch.sigmoid(self.gate_logit)
+            if g.item() == 0.0:
+                # hard mask: no change to softmax denom
+                logits[:, :, T:] = neg_inf_like(logits)
+            else:
+                # soft mask: add log(g) so prompt columns get downweighted
+                # (equivalent to multiplying exp(logits) by g)
+                logits[:, :, T:] = logits[:, :, T:] + torch.log(g)
+
+        attn = torch.softmax(logits, dim=-1).to(v.dtype)  # (BH, T, T_total)
+        out = torch.einsum("bts,bcs->bct", attn, v)       # (BH, C_head, T)
+        out = out.view(bs, H*ch, T)                       # (B, H*C, T)
+        return out
+
+
+
+# class PromptedAttentionBlock(AttentionBlock):
+#     """
+#     Same math as the original self-attention, but we append L learnable
+#     key/value tokens (SoftPrompt3D) to every attention call.
+#     """
+#     def __init__(self, *a, prompt_len=8, **kw):
+#         super().__init__(*a, **kw)
+#         # Soft-prompt lives on the same channel dim as the feature map
+#         self.soft_prompt = SoftPrompt3D(prompt_len, self.channels)
+
+#     def _forward(self, x):
+#         b, c, *spatial = x.shape
+#         x_flat = x.reshape(b, c, -1)                 # (B,C,T)
+#         T = x_flat.shape[-1]
+
+#         # -------- append prompt tokens -------------
+#         p = self.soft_prompt(b)                     # (B,L,C)
+#         p = p.transpose(1, 2).contiguous()           # (B,C,L)
+#         x_tok = torch.cat([x_flat, p], dim=2)        # (B,C,T+L)
+#         # -------------------------------------------
+
+#         qkv = self.qkv(self.norm(x_tok))             # (B,3C,T+L)
+#         h = self.attention(qkv)                      # (B,C,T+L)
+
+#         h_main = h[:, :, :T]                         # drop prompt locations
+#         h_main = self.proj_out(h_main)
+#         return (x_flat + h_main).reshape(b, c, *spatial)
+
+class PromptedAttentionBlock(nn.Module):
+    """
+    Drop-in replacement for AttentionBlock that appends L learnable K/V prompts.
+    With gate ~ 0, it exactly reproduces the pretrained block.
+    """
+    def __init__(self, base_attn_block: "AttentionBlock", prompt_len=8):
+        super().__init__()
+        # Copy pretrained submodules/weights verbatim
+        self.channels = base_attn_block.channels
+        self.num_heads = base_attn_block.attention.n_heads
+        self.norm = base_attn_block.norm
+        self.qkv  = base_attn_block.qkv
+        self.proj_out = base_attn_block.proj_out
+
+        self.prompt_len = int(prompt_len)
+
+        # soft prompt lives in channel dim
+        # shape: (1, prompt_len, C) and gets broadcast to batch
+        self.soft_prompt = SoftPrompt3D(self.prompt_len, self.channels)
+        nn.init.normal_(self.soft_prompt, mean=0.0, std=1e-5)  # near-zero start
+
+        # our custom attention (replaces QKVAttention/Legacy in effect)
+        self.prompt_attention = QKVPromptAttention(self.num_heads, self.prompt_len)
+
+    def forward(self, x):
+        # Keep identical control flow (including checkpointing) by mirroring AttentionBlock._forward:
+        return self._forward(x)
 
     def _forward(self, x):
         b, c, *spatial = x.shape
-        x_flat = x.reshape(b, c, -1)                 # (B,C,T)
+        x_flat = x.reshape(b, c, -1)              # (B,C,T)
         T = x_flat.shape[-1]
 
-        # -------- append prompt tokens -------------
-        p = self.soft_prompt(b)                     # (B,L,C)
-        p = p.transpose(1, 2).contiguous()           # (B,C,L)
-        x_tok = torch.cat([x_flat, p], dim=2)        # (B,C,T+L)
-        # -------------------------------------------
+        # Build token sequence with prompts appended as extra positions
+        # prompts: (B, C, L)
+        p = self.soft_prompt(b)    # (B, L, C)
+        p = p.transpose(1, 2).contiguous()        # (B, C, L)
+        x_tok = torch.cat([x_flat, p], dim=2)     # (B, C, T+L)
 
-        qkv = self.qkv(self.norm(x_tok))             # (B,3C,T+L)
-        h = self.attention(qkv)                      # (B,C,T+L)
+        # qkv over concatenated sequence (uses pretrained conv + norm)
+        qkv = self.qkv(self.norm(x_tok))          # (B, 3C, T+L)
+        q, k, v = qkv.chunk(3, dim=1)
 
-        h_main = h[:, :, :T]                         # drop prompt locations
-        h_main = self.proj_out(h_main)
-        return (x_flat + h_main).reshape(b, c, *spatial)
+        # tell the attention where the split is so it can mask/gate prompts
+        self.prompt_attention.T_main = T
+        h = self.prompt_attention(q, k, v)        # (B, C, T)  (returns main positions only)
+
+        h = self.proj_out(h)
+        return (x_flat + h).reshape(b, c, *spatial)
 
 def count_flops_attn(model, _x, y):
     """
@@ -510,6 +626,7 @@ class UNet3DModel(nn.Module):
     # def __init__(self, config_dict):
     def __init__(
         self,
+        prompt_len,
         image_size,
         in_channels,
         model_channels,
@@ -556,6 +673,7 @@ class UNet3DModel(nn.Module):
         if num_head_channels == -1:
             assert num_heads != -1, 'Either num_heads or num_head_channels has to be set'
 
+        self.promt_len = prompt_len
         self.image_size = image_size
         self.in_channels = in_channels
         self.model_channels = model_channels
@@ -632,6 +750,7 @@ class UNet3DModel(nn.Module):
                             num_heads=num_heads,
                             num_head_channels=dim_head,
                             use_new_attention_order=use_new_attention_order,
+                            prompt_len=self.prompt_len                     
                         ) if not use_spatial_transformer else SpatialTransformer3D(
                             ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
                         )
@@ -681,12 +800,13 @@ class UNet3DModel(nn.Module):
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
             ),
-            AttentionBlock(
+            PromptedAttentionBlock(
                 ch,
                 use_checkpoint=use_checkpoint,
                 num_heads=num_heads,
                 num_head_channels=dim_head,
                 use_new_attention_order=use_new_attention_order,
+                prompt_len=self.prompt_len,
             ) if not use_spatial_transformer else SpatialTransformer3D(
                             ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
                         ),
@@ -727,12 +847,13 @@ class UNet3DModel(nn.Module):
                         #num_heads = 1
                         dim_head = ch // num_heads if use_spatial_transformer else num_head_channels
                     layers.append(
-                        AttentionBlock(
+                        PromptedAttentionBlock(
                             ch,
                             use_checkpoint=use_checkpoint,
                             num_heads=num_heads_upsample,
                             num_head_channels=dim_head,
                             use_new_attention_order=use_new_attention_order,
+                            prompt_len=self.prompt_len,
                         ) if not use_spatial_transformer else SpatialTransformer3D(
                             ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
                         )

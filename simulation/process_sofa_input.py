@@ -20,7 +20,7 @@ Author: adapted for your SDFusion setup.
 from __future__ import annotations
 import os
 import numpy as np
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List,Union
 
 # optional torch import (if your SDF is a torch tensor)
 try:
@@ -34,6 +34,9 @@ import meshio
 from pathlib import Path
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import map_coordinates
+
+from skimage.measure import marching_cubes
+# import pyvista as pv
 
 
 # pygalmesh uses CGAL; make sure wheels are available for your Python
@@ -404,6 +407,210 @@ def extract_surfaces_from_sdf(
 
 #     return outer_V, outer_F, cavity_meshes
 
+def verify_sdf_cavities(sdf: np.ndarray, voxel_size: Tuple[float, float, float], out_dir: Optional[str] = None):
+    """
+    Verify whether the SDF input has interior cavities (holes).
+    
+    Args:
+        sdf: 3D SDF array [D,H,W], negative=solid, positive=air
+        voxel_size: Physical spacing per voxel
+        out_dir: Optional directory to save visualization slices
+    
+    Returns:
+        dict with cavity statistics
+    """
+    import numpy as np
+    from scipy import ndimage as ndi
+    
+    print("\n" + "="*60)
+    print("SDF CAVITY VERIFICATION")
+    print("="*60)
+    
+    # Basic SDF statistics
+    print(f"\n📊 SDF Statistics:")
+    print(f"  Shape: {sdf.shape}")
+    print(f"  Value range: [{sdf.min():.4f}, {sdf.max():.4f}]")
+    print(f"  Voxel size: {voxel_size}")
+    
+    solid = sdf < 0.0
+    air = ~solid
+    
+    solid_count = np.sum(solid)
+    air_count = np.sum(air)
+    total = sdf.size
+    
+    print(f"  Solid voxels (SDF < 0): {solid_count:,} ({100*solid_count/total:.1f}%)")
+    print(f"  Air voxels (SDF > 0): {air_count:,} ({100*air_count/total:.1f}%)")
+    
+    # Label all air regions with 26-connectivity
+    print(f"\n🔍 Analyzing Air Regions (26-connectivity):")
+    air_labels, num_air_regions = ndi.label(air, structure=np.ones((3,3,3), bool))
+    print(f"  Total air regions found: {num_air_regions}")
+    
+    if num_air_regions == 0:
+        print("  ⚠️  NO AIR REGIONS - SDF is completely solid!")
+        return {"has_cavities": False, "num_cavities": 0, "error": "No air regions"}
+    
+    # CORRECT METHOD: Flood-fill from boundary to find ALL exterior air
+    # (not just air regions touching boundary - handles objects smaller than grid)
+    print(f"\n🌊 Flood-Filling Exterior Air from Boundary:")
+    exterior_air = _flood_fill_exterior_air(air)
+    num_exterior_voxels = np.sum(exterior_air)
+    print(f"  Exterior air voxels: {num_exterior_voxels:,} ({100*num_exterior_voxels/air_count:.1f}% of all air)")
+    
+    # Interior air = all air that flood-fill didn't reach
+    interior_air = air & ~exterior_air
+    num_interior_voxels = np.sum(interior_air)
+    print(f"  Interior air voxels: {num_interior_voxels:,} ({100*num_interior_voxels/air_count:.1f}% of all air)")
+    
+    if num_interior_voxels == 0:
+        print(f"  ✓ All air is reachable from boundary - no enclosed cavities")
+        return {
+            "has_cavities": False,
+            "num_cavities": 0,
+            "num_air_regions": num_air_regions,
+            "num_exterior_regions": num_air_regions,
+            "cavity_details": [],
+            "solid_voxels": int(solid_count),
+            "air_voxels": int(air_count),
+            "sdf_range": [float(sdf.min()), float(sdf.max())],
+            "after_closing_cavities": 0
+        }
+    
+    # Label the interior air to find individual cavities
+    interior_labels_array, num_cavities = ndi.label(interior_air, structure=np.ones((3,3,3), bool))
+    print(f"  Interior cavities found: {num_cavities}")
+    
+    # Get set of cavity label IDs
+    interior_labels = set(range(1, num_cavities + 1))
+    
+    # Analyze each cavity
+    cavity_info = []
+    if interior_labels:
+        print(f"\n🕳️  Cavity Details:")
+        for i, label_id in enumerate(sorted(interior_labels), 1):
+            cavity_mask = interior_labels_array == label_id
+            cavity_voxels = np.sum(cavity_mask)
+            
+            # Compute cavity bounding box
+            coords = np.argwhere(cavity_mask)
+            bbox_min = coords.min(axis=0)
+            bbox_max = coords.max(axis=0)
+            bbox_size = bbox_max - bbox_min + 1
+            
+            # Physical dimensions
+            phys_size = bbox_size * np.array(voxel_size)
+            cavity_volume = cavity_voxels * np.prod(voxel_size)
+            
+            print(f"  Cavity {i} (label {label_id}):")
+            print(f"    Voxels: {cavity_voxels:,}")
+            print(f"    Volume: {cavity_volume:.6f} cubic units")
+            print(f"    Bounding box (voxels): {bbox_size}")
+            print(f"    Physical size: [{phys_size[0]:.4f}, {phys_size[1]:.4f}, {phys_size[2]:.4f}]")
+            print(f"    Center (voxel): {(bbox_min + bbox_max) / 2}")
+            
+            cavity_info.append({
+                "label": int(label_id),
+                "voxels": int(cavity_voxels),
+                "volume": float(cavity_volume),
+                "bbox_voxels": bbox_size.tolist(),
+                "bbox_physical": phys_size.tolist(),
+                "center": ((bbox_min + bbox_max) / 2).tolist()
+            })
+    
+    # Check for potential leaks (cavities connected to exterior via thin channels)
+    print(f"\n🔬 Leak Detection (closing test):")
+    air_closed = ndi.binary_closing(air, structure=np.ones((3,3,3), bool), iterations=1)
+    closed_labels, num_closed = ndi.label(air_closed, structure=np.ones((3,3,3), bool))
+    
+    closed_boundary = np.unique(np.concatenate([
+        closed_labels[0, :, :].ravel(), closed_labels[-1, :, :].ravel(),
+        closed_labels[:, 0, :].ravel(), closed_labels[:, -1, :].ravel(),
+        closed_labels[:, :, 0].ravel(), closed_labels[:, :, -1].ravel(),
+    ]))
+    closed_boundary = set(closed_boundary) - {0}
+    closed_interior = set(range(1, num_closed + 1)) - closed_boundary
+    
+    print(f"  After binary closing (sealing 1-voxel gaps):")
+    print(f"    Interior cavities: {len(closed_interior)}")
+    if len(closed_interior) > len(interior_labels):
+        print(f"    ✅ Closing revealed {len(closed_interior) - len(interior_labels)} additional sealed cavities")
+        print(f"    → Original cavities likely have small leaks to exterior")
+    elif len(closed_interior) < len(interior_labels):
+        print(f"    ⚠️  Closing reduced cavities by {len(interior_labels) - len(closed_interior)}")
+        print(f"    → Some cavities may be artifacts or very thin")
+    else:
+        print(f"    ✅ Cavity count unchanged - no detectable leaks")
+    
+    # Visualize middle slices if output directory provided
+    if out_dir and interior_labels:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        
+        os.makedirs(out_dir, exist_ok=True)
+        
+        mid_z, mid_y, mid_x = np.array(sdf.shape) // 2
+        
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        
+        # SDF slices
+        axes[0, 0].imshow(sdf[mid_z, :, :], cmap='RdBu', origin='lower')
+        axes[0, 0].set_title(f'SDF Z={mid_z}')
+        axes[0, 0].contour(sdf[mid_z, :, :], levels=[0], colors='black', linewidths=2)
+        
+        axes[0, 1].imshow(sdf[:, mid_y, :], cmap='RdBu', origin='lower')
+        axes[0, 1].set_title(f'SDF Y={mid_y}')
+        axes[0, 1].contour(sdf[:, mid_y, :], levels=[0], colors='black', linewidths=2)
+        
+        axes[0, 2].imshow(sdf[:, :, mid_x], cmap='RdBu', origin='lower')
+        axes[0, 2].set_title(f'SDF X={mid_x}')
+        axes[0, 2].contour(sdf[:, :, mid_x], levels=[0], colors='black', linewidths=2)
+        
+        # Cavity visualization using interior_labels_array
+        axes[1, 0].imshow(interior_labels_array[mid_z, :, :], cmap='tab20', origin='lower')
+        axes[1, 0].set_title(f'Cavities Z={mid_z}')
+        
+        axes[1, 1].imshow(interior_labels_array[:, mid_y, :], cmap='tab20', origin='lower')
+        axes[1, 1].set_title(f'Cavities Y={mid_y}')
+        
+        axes[1, 2].imshow(interior_labels_array[:, :, mid_x], cmap='tab20', origin='lower')
+        axes[1, 2].set_title(f'Cavities X={mid_x}')
+        
+        plt.tight_layout()
+        viz_path = os.path.join(out_dir, "sdf_cavity_verification.png")
+        plt.savefig(viz_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"\n💾 Saved visualization: {viz_path}")
+    
+    # Summary
+    print(f"\n" + "="*60)
+    print("SUMMARY:")
+    has_cavities = len(interior_labels) > 0
+    if has_cavities:
+        print(f"✅ SDF HAS {len(interior_labels)} INTERIOR CAVIT{'Y' if len(interior_labels)==1 else 'IES'}")
+        total_cavity_voxels = sum(info['voxels'] for info in cavity_info)
+        print(f"   Total cavity volume: {sum(info['volume'] for info in cavity_info):.6f} cubic units")
+        print(f"   Total cavity voxels: {total_cavity_voxels:,} ({100*total_cavity_voxels/air_count:.1f}% of all air)")
+    else:
+        print(f"❌ SDF HAS NO INTERIOR CAVITIES")
+        print(f"   All air regions connect to the boundary (exterior air only)")
+    print("="*60 + "\n")
+    
+    return {
+        "has_cavities": has_cavities,
+        "num_cavities": len(interior_labels),
+        "num_air_regions": num_air_regions,
+        "num_exterior_voxels": int(num_exterior_voxels),
+        "num_interior_voxels": int(num_interior_voxels),
+        "cavity_details": cavity_info,
+        "solid_voxels": int(solid_count),
+        "air_voxels": int(air_count),
+        "sdf_range": [float(sdf.min()), float(sdf.max())],
+        "after_closing_cavities": len(closed_interior)
+    }
+
+
 def tet_mesh_from_sdf(
     sdf: np.ndarray,
     voxel_size: Tuple[float, float, float],
@@ -415,21 +622,23 @@ def tet_mesh_from_sdf(
     import numpy as np
     import pygalmesh
 
-    D, H, W = sdf.shape
-    xs = origin[0] + np.arange(D) * voxel_size[0]
-    ys = origin[1] + np.arange(H) * voxel_size[1]
-    zs = origin[2] + np.arange(W) * voxel_size[2]
+    # D, H, W = sdf.shape
+    # xs = origin[0] + np.arange(D) * voxel_size[0]
+    # ys = origin[1] + np.arange(H) * voxel_size[1]
+    # zs = origin[2] + np.arange(W) * voxel_size[2]
 
-    # pygalmesh expects continuous implicit function while our input sdf is discrete grid. Thus, using Interpolator.
-    interp = RegularGridInterpolator((xs, ys, zs), sdf, bounds_error=False, fill_value=1.0)
+    # # pygalmesh expects continuous implicit function while our input sdf is discrete grid. Thus, using Interpolator.
+    # interp = RegularGridInterpolator((xs, ys, zs), sdf, bounds_error=False, fill_value=1.0)
 
     # class Domain(pygalmesh.DomainBase):
     #     def __init__(self):
     #         super().__init__()
     #         self.bmin = np.array([xs.min(), ys.min(), zs.min()], dtype=np.float64)
     #         self.bmax = np.array([xs.max(), ys.max(), zs.max()], dtype=np.float64)
-    #         half = self.bmax - self._center        # (hx, hy, hz)
-    #         self._rad2 = float(np.dot(half, half)) # hx^2 + hy^2 + hz^2
+    #         self._center = 0.5 * (self.bmin + self.bmax)
+    #         self._rad2 = float(np.max((self.bmax - self._center) ** 2))
+    #         # half = self.bmax - self._center        # (hx, hy, hz)
+    #         # self._rad2 = float(np.dot(half, half)) # hx^2 + hy^2 + hz^2
     #     def eval(self, x):
     #         return float(interp(np.asarray(x).reshape(1, 3))[0])
     #     # Some versions only need squared radius; others also call center():
@@ -437,8 +646,7 @@ def tet_mesh_from_sdf(
     #         return self._center
     #     def get_bounding_sphere_squared_radius(self):
     #         return self._rad2
-    # # pip install pygalmesh meshio numpy scipy
-
+    # dom = Domain()
 
     class Domain(pygalmesh.DomainBase):
         """
@@ -497,7 +705,7 @@ def tet_mesh_from_sdf(
         def get_bounding_sphere_squared_radius(self):
             return self._rad2 
 
-    dom = Domain()
+    dom = Domain(sdf, voxel_size, origin)
 
     mesh = pygalmesh.generate_mesh(
         dom,
@@ -527,130 +735,101 @@ def reextract_surfaces_from_tet_fast(
     Fast & robust re-extraction of outer/cavity surfaces from a tetra mesh:
     - Build all faces from tets
     - Boundary = faces that occur exactly once
-    - Split boundary into connected components
-    - Classify components via SDF sign at face centroids (air-side => cavity)
+    - Split boundary into watertight connected components
+    - Pick the largest volume component as the outer shell
+    - For each cavity component:
+        * quickly fix triangle winding (consistent orientation)
+        * flip normals inward (needed for pressure BCs)
+        * export as STL
+    Notes on speed:
+      - We avoid global 'process=True' on the big boundary mesh.
+      - We only run small repairs on each per-component mesh just before export.
     """
+    import os
     import numpy as np
     import meshio, trimesh
+
+    os.makedirs(out_dir, exist_ok=True)
 
     m = meshio.read(vtu_path)
     pts = m.points
     if "tetra" in m.cells_dict:
         tets = m.cells_dict["tetra"]
     else:
+        # Some generators write tetra10 etc.; if you need that, adapt here
         raise RuntimeError("No tetra cells in VTU.")
 
     # ---- 1) collect all faces (each tet contributes 4 faces) ----
-    a, b, c, d = tets[:,0], tets[:,1], tets[:,2], tets[:,3] # a,b,c, d are (N,) int
+    a, b, c, d = tets[:, 0], tets[:, 1], tets[:, 2], tets[:, 3]  # (N,) int
 
-    # collection of all faces 
     faces = np.vstack([
-        np.stack([a, b, c], axis=1), # three vertices form one face (2D plane)
+        np.stack([a, b, c], axis=1),
         np.stack([a, b, d], axis=1),
         np.stack([a, c, d], axis=1),
         np.stack([b, c, d], axis=1),
     ])  # (4*N, 3)
 
-    # sort vertex indices within each face. Two tets sharing a face will have the same sorted indices
-    faces_sorted = np.sort(faces, axis=1)
-    faces_sorted = np.ascontiguousarray(faces_sorted)  # make sure faces_sorted is stored contiguously in memory for np.unique below
+    # sort vertices within each face so shared faces match exactly
+    faces_sorted = np.ascontiguousarray(np.sort(faces, axis=1))
 
     # ---- 2) boundary/surface faces = those appearing exactly once ----
-    uniq, counts = np.unique(faces_sorted, axis=0, return_counts=True) #uniq is a set of faces, counts is how many times each face from uniq appears
-    boundary = uniq[counts == 1] 
+    uniq, counts = np.unique(faces_sorted, axis=0, return_counts=True)
+    boundary = uniq[counts == 1]  # (M,3) int indices into pts
 
-    # ---- 3) split boundary into connected components ----
-    # Make a raw mesh for connectivity; disable processing to keep indices intact
+    # ---- 3) split boundary into connected components (no global processing)
     boundary_mesh = trimesh.Trimesh(pts, boundary, process=False)
-    components = boundary_mesh.split(only_watertight=True) #only return watertight components as pneumatic parts requires watertight meshes
+    components = boundary_mesh.split(only_watertight=True)  # pneumatic parts need closed shells
 
-    if (len(components) == 0):
-        raise RuntimeError("No watertight components found in boundary mesh.")
-
-    # ---- 4) classify each component via SDF sign at face centroids ----
-    outer_faces_all = []
-    cavity_meshes = []
-    vox = np.asarray(voxel_size, dtype=np.float64)
-    ori = np.asarray(origin, dtype=np.float64)
-
-    # for comp in components:
-    #     if comp.faces.shape[0] == 0:
-    #         continue
-    #     # face centroids in world coords
-    #     centroids = comp.triangles_center  # (F, 3)
-
-    #     # map to voxel indices
-    #     ijk = np.floor((centroids - ori) / vox).astype(int)
-    #     ijk[:, 0] = np.clip(ijk[:,0], 0, sdf.shape[0]-1)
-    #     ijk[:, 1] = np.clip(ijk[:,1], 0, sdf.shape[1]-1)
-    #     ijk[:, 2] = np.clip(ijk[:,2], 0, sdf.shape[2]-1)
-
-    #     # heuristic: if most centroids are on AIR side (sdf>0), it's a cavity wall
-    #     air_ratio = np.mean(sdf[ijk[:,0], ijk[:,1], ijk[:,2]] > 0.0)
-
-    #     if air_ratio > 0.5:
-    #         # cavity: export each as its own STL (normals inward for SOFA pressure)
-    #         cm = trimesh.Trimesh(comp.vertices, comp.faces, process=True)
-    #         cm.invert()
-    #         cavity_meshes.append(cm)
-    #     else:
-    #         # outer shell: collect faces (we’ll merge and export once)
-    #         outer_faces_all.append(comp.faces)
-
-        # ---- 3) GEOMETRIC CLASSIFICATION ----
+    if len(components) == 0:
+        return False
+    # ---- 4) choose outer shell by volume (fallback to bbox volume)
     comp_metrics = []
     for comp in components:
-        if comp.faces.shape[0] == 0:
+        if comp.faces.size == 0:
             comp_metrics.append(0.0)
             continue
-        
-        # METHOD 1: Bounding box volume (always works)
-        bbox_extents = comp.bounds[1] - comp.bounds[0]  # (3,)
-        bbox_vol = np.prod(bbox_extents)
-        
-        # METHOD 2: Mesh volume (more accurate, requires watertight)
-        # Use mesh volume if available, fallback to bbox
-        if comp.is_volume:
-            metric = abs(comp.volume)  # abs() handles orientation
+        # Using signed volume requires consistent winding; for speed, use bbox as a fallback metric
+        if getattr(comp, "is_volume", False):
+            # comp.is_volume is True when watertight + consistent winding
+            metric = abs(comp.volume)
         else:
-            metric = bbox_vol
-        
+            # fast fallback if winding not yet consistent
+            ext = comp.bounds[1] - comp.bounds[0]
+            metric = float(np.prod(ext))
         comp_metrics.append(metric)
 
-    # Largest component is outer shell
-    outer_idx = np.argmax(comp_metrics)
+    outer_idx = int(np.argmax(comp_metrics))
 
-    cavity_meshes = []
+    # ---- 5) export cavity components with fixed winding + inward normals
+    from trimesh import repair
+
+    cavity_count = 0
     for i, comp in enumerate(components):
-        if comp.faces.shape[0] == 0:
+        if comp.faces.size == 0 or i == outer_idx:
             continue
 
-        if i == outer_idx:
-            # Outer: normals outward (default)
-            comp.export(os.path.join(out_dir, "outer_from_tet.stl"))
-        else:
+        # --- Minimal, fast cleanup (local to this component)
+        # don't rezero or recenter: we want to keep world coordinates intact
+        comp.remove_duplicate_faces()
+        comp.remove_degenerate_faces()
+        comp.remove_unreferenced_vertices()
+        comp.merge_vertices()  # weld near-duplicates (fast)
+
+        # --- Make triangle winding globally consistent
+        # (This fixes the "winding_consistent=False" issue and gives meaningful signed volume.)
+        repair.fix_winding(comp)
+
+        # --- For cavity pressure: normals should point INWARD.
+        # Convention: for a closed shell, positive volume => outward normals.
+        # Flip if needed so we end up with inward normals.
+        if comp.volume < 0:
             comp.invert()
-            cavity_meshes.append(comp)
 
-    for i, cm in enumerate(cavity_meshes, start=1):
-        cm.export(os.path.join(out_dir, f"cavity_from_tet_{i}.stl"))
-
-    print(f"Found {len(cavity_meshes)} cavities")
-
-    # Merge and export outer_from_tet
-    if outer_faces_all:
-        outer_faces_merge = np.vstack(outer_faces_all)
-        out_mesh = trimesh.Trimesh(pts, outer_faces_merge, process=True)
-        out_mesh.export(os.path.join(out_dir, "outer_from_tet.stl"))
-    else:
-        # Fallback: export everything as one outer if classification failed
-        fallback = trimesh.Trimesh(pts, boundary, process=True)
-        fallback.export(os.path.join(out_dir, "outer_from_tet.stl"))
-    
-    # Export cavities
-    for i, cm in enumerate(cavity_meshes, start=1):
-        cm.export(os.path.join(out_dir, f"cavity_from_tet_{i}.stl"))
-        print(f"Exported")
+        # Export
+        cavity_count += 1
+        comp.export(os.path.join(out_dir, f"cavity_from_tet_{cavity_count}.stl"))
+    return True
+    # print(f"[reextract] cavities exported: {cavity_count}")
 
 
 def _downsample_sdf(sdf: np.ndarray, factor: int = 1) -> np.ndarray:
@@ -663,6 +842,56 @@ def _downsample_sdf(sdf: np.ndarray, factor: int = 1) -> np.ndarray:
     new_shape = (max(1, D // factor), max(1, H // factor), max(1, W // factor))
     return resize(sdf, new_shape, order=1, anti_aliasing=True, mode="reflect").astype(np.float32)
 
+# def sdf_to_tets(
+#     sdf: Union[np.ndarray, "torch.Tensor"],
+#     level: float = 0.0,
+#     voxel_size: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+#     origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+#     *,
+#     # TetGen quality/behavior knobs (tune for speed/quality)
+#     order: int = 1,
+#     minratio: float = 1.5,        # quality target (bigger => stricter; slower)
+#     mindihedral: float = 20.0,    # minimum dihedral angle
+#     steinerleft: int = 100000,    # extra points TetGen may insert; -1 = unlimited
+#     verbose: bool = False,
+# ):
+#     """
+#     Convert an SDF volume (D,H,W) into a tetrahedral mesh using marching cubes + TetGen.
+
+#     Returns:
+#         grid: pyvista.UnstructuredGrid (tet mesh). Use grid.points and grid.cells to access arrays.
+#     """
+#     # ---- 1) Normalize input to a 3D NumPy array ----
+#     if torch is not None and isinstance(sdf, torch.Tensor):
+#         sdf_np = sdf.detach().cpu().numpy()
+#     else:
+#         sdf_np = np.asarray(sdf)
+#     assert sdf_np.ndim == 3, f"Expected [D,H,W], got {sdf_np.shape}"
+
+#     # ---- 2) Extract surface with marching cubes at 'level' ----
+#     # spacing maps voxel indices to world units (e.g., mm). marching_cubes returns vertices in world coords if spacing is given.
+#     verts, faces, _, _ = marching_cubes(sdf_np, level=level, spacing=voxel_size)
+#     # apply origin offset (so the mesh sits in your world frame)
+#     verts = verts + np.array(origin, dtype=float)
+
+#     # ---- 3) Build a PyVista surface (faces must be encoded as [3, i, j, k] per triangle) ----
+#     faces_encoded = np.hstack([np.full((faces.shape[0], 1), 3, dtype=np.int64), faces]).ravel()
+#     surf = pv.PolyData(verts, faces_encoded)
+#     # (optional) clean/triangulate just in case
+#     surf = surf.triangulate().clean()
+
+#     # ---- 4) Tetrahedralize with TetGen ----
+#     tet = tetgen.TetGen(surf)
+#     tet.tetrahedralize(
+#         order=order,
+#         minratio=minratio,
+#         mindihedral=mindihedral,
+#         steinerleft=steinerleft,
+#         verbose=verbose,
+#     )
+#     grid = tet.grid  # pyvista.UnstructuredGrid containing tets
+#     return grid
+
 def export_sdf_volume_to_sofa(
     dec_tensor,
     cal_band,
@@ -673,12 +902,14 @@ def export_sdf_volume_to_sofa(
     clean_outer: bool = True,
     max_cell_circumradius: float = 0.004,
     max_facet_distance: float = 0.001,
+    verify_cavities: bool = True, 
 ) -> None:
     """
     High-level one-call export:
-      1) Extract outer & cavity surfaces from SDF and save STLs
-      2) Tetrahedralize solid with pygalmesh and save VTU
-      3) Re-extract surfaces from tet and save *_from_tet.stl
+      1) Verify SDF has cavities (optional)
+      2) Extract outer & cavity surfaces from SDF and save STLs
+      3) Tetrahedralize solid with pygalmesh and save VTU
+      4) Re-extract surfaces from tet and save *_from_tet.stl
     """
     os.makedirs(out_dir, exist_ok=True)
 
@@ -689,11 +920,17 @@ def export_sdf_volume_to_sofa(
     if voxel_ds_factor > 1:
         sdf = _downsample_sdf(sdf, voxel_ds_factor)
         voxel_size = tuple(v * voxel_ds_factor for v in voxel_size)
+    
+    # VERIFY CAVITIES BEFORE MESHING
+    if verify_cavities:
+        cavity_stats = verify_sdf_cavities(sdf, voxel_size, out_dir=out_dir)
+        if not cavity_stats["has_cavities"]:
+            return False
 
     # # 1) surfaces from SDF
-    # # outer_V, outer_F= extract_surfaces_from_sdf(
-    # #     sdf, cal_band, voxel_size, origin, invert_sign=invert_sign, clean_outer=clean_outer
-    # # )
+    # outer_V, outer_F= extract_surfaces_from_sdf(
+    #     sdf, cal_band, voxel_size, origin, invert_sign=invert_sign, clean_outer=clean_outer
+    # )
 
     # trimesh.Trimesh(outer_V, outer_F, process=False).export(os.path.join(out_dir, "outer.stl"))
     # trimesh.Trimesh(inner_V, inner_F, process=False).export(os.path.join(out_dir, "cavity.stl"))
@@ -703,10 +940,15 @@ def export_sdf_volume_to_sofa(
     tet_mesh_from_sdf(sdf, voxel_size, origin, vtu_path,
                                  max_cell_circumradius=max_cell_circumradius,
                                  max_facet_distance=max_facet_distance)
+    # mesh = sdf_to_tets(sdf=sdf, voxel_size=voxel_size, origin=origin)
+    # pv.save_meshio(vtu_path, mesh)
+
 
     # 3) re-extract (vectorized)
-    reextract_surfaces_from_tet_fast(vtu_path, sdf, voxel_size, origin, out_dir)
-
+    is_watertight = reextract_surfaces_from_tet_fast(vtu_path, sdf, voxel_size, origin, out_dir)
+    if not is_watertight:
+        return False
+    return True
     # print(f"[OK] Exported to: {os.path.abspath(out_dir)}")
     # print("  - finger.vtu")
     # print("  - outer.stl, cavity_*.stl")
