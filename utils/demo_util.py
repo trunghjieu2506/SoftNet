@@ -93,7 +93,8 @@ class SDFusionOpt(BaseOpt):
             ckpt_path='saved_ckpt/sdfusion-snet-all.pth',
             vq_ckpt_path='saved_ckpt/vqvae-snet-all.pth',
             top_k=50,
-            lr=0.02
+            lr=0.02,
+            batch_size=1,
         ):
         self.model = 'sdfusion'
         self.name = 'sdfusion-snet-all'
@@ -107,6 +108,7 @@ class SDFusionOpt(BaseOpt):
         self.top_k = top_k
         self.logs_dir = 'logs'
         self.lr = lr
+        self.batch_size = batch_size
         self.results_dir = 'saved_results'
         import os 
         import utils
@@ -124,9 +126,9 @@ class SDFusionOpt(BaseOpt):
         tb_dir = '%s/tboard' % expr_dir
         if not os.path.exists(tb_dir):
             os.makedirs(tb_dir)
-        self.opt.tb_dir = tb_dir
+        self.tb_dir = tb_dir
         writer = SummaryWriter(log_dir=tb_dir)
-        self.opt.writer = writer
+        self.writer = writer
 
     def name(self):
         return 'SDFusionTestOption'

@@ -8,22 +8,20 @@ class TopKBuffer:
     """
     def __init__(self, buffer_size=50, k=10):
         self.top_k  = k
-        self.hp = []          # max-heap on −angle
+        self.hp = []          # min-heap for top-K items 
         self.heap = deque(maxlen=buffer_size)
         self.counter = 0 
     def push_single(self, angle, z0):
         self.counter += 1
-        is_topK = False
         item = (float(angle), self.counter, z0.detach().cpu())
         if len(self.hp) < self.top_k:
             heapq.heappush(self.hp, item)
-            is_topK = True
         else:
             if item[0] > self.hp[0][0]:     #a better simulation results
                 heapq.heapreplace(self.hp, item)
                 is_topK = True
-        if not is_topK:
-            self.heap.append(item)
+            else:
+                self.heap.append(item)
 
     def push(self, items):
         for item in items:
